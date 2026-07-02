@@ -1,0 +1,8 @@
+# Direct dependencies. Regenerate the pinned requirements.txt with:
+#   pip-compile requirements.in
+matplotlib
+notebook
+numpy>=2.0
+pillow
+tensorflow>=2.17          # >=2.17 supports NumPy 2.x and Python 3.12
+tensorflow-datasets       # provides the FER-2013 facial-emotion dataset

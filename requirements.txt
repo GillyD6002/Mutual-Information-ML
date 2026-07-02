@@ -1,0 +1,17 @@
+# Simplified dependency pin for a modern Python (3.11-3.12) environment.
+#
+# This lists the *direct* dependencies with minimum compatible versions. For a
+# fully-resolved, hash-pinned lockfile, install pip-tools and run:
+#   pip-compile requirements.in
+#
+# Notes:
+#   - tensorflow >=2.17 is required for NumPy 2.x and Python 3.12 support.
+#   - tensorflow-datasets supplies the FER-2013 dataset (replacing Tiny Images).
+#   - pillow is used to resize FER-2013 (48x48) down to the 28x28 pipeline size.
+
+matplotlib>=3.8
+notebook>=7.0
+numpy>=2.0
+pillow>=10.0
+tensorflow>=2.17
+tensorflow-datasets>=4.9
