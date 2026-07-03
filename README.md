@@ -34,7 +34,7 @@ images, _, _ = img.get_images("fer2013", 70000, fer_csv_path="path/to/fer2013.cs
 
 ## Requirements
 
-The code has been updated for modern Python (tested against Python 3.11-3.12) and TensorFlow 2.x / Keras 3. Install the dependencies with:
+The code has been updated for modern Python (tested against Python 3.11-3.13) and TensorFlow 2.x / Keras 3. Install the dependencies with:
 
 ```bash
 pip install -r requirements.txt
@@ -45,6 +45,10 @@ pip install -r requirements.txt
 - `tensorflow>=2.17` (needed for NumPy 2.x and Python 3.12 support)
 - `tensorflow-datasets` (provides FER-2013)
 - `numpy>=2.0`, `matplotlib`, `pillow`, `notebook`
+
+### A note on Python 3.14
+
+TensorFlow does not yet publish a Windows build for Python 3.14 (not even in the `tf-nightly` prereleases, which only ship Linux/macOS wheels for cp314 as of this writing). Since TensorFlow is a hard dependency, use **Python 3.13** on Windows for now — it's the newest interpreter TensorFlow actually supports. Re-check TensorFlow's PyPI release page periodically; once a Windows cp314 wheel ships, this project should work unmodified under 3.14.
 
 ## Running the experiments
 
@@ -62,3 +66,7 @@ python -m src.mine
 - Made the TensorFlow import lazy so the Gaussian-field and plotting utilities work without TensorFlow installed.
 - Refreshed `requirements.in`/`requirements.txt` for modern Python.
 - Added a correctly spelled `LogisticRegression` alias (the original `LogsiticRegression` name still works).
+- Fixed `src/mine.py` for the current Keras 3 data-adapter API, which is stricter about generator inputs than the version this project was originally written against:
+  - `get_finite_dataset` now yields `(inputs, targets)` as tuples instead of lists — Keras's generator adapter now infers a `tf.TypeSpec` per input and rejects plain lists.
+  - `train_steps`/`val_steps` are now cast to `int` (`np.ceil` returns a `numpy.float64`, which the newer epoch iterator no longer accepts in `range()`).
+  - Added `mine.cycle_generator`, replacing `itertools.cycle(...)` for repeating the validation generator — Keras's adapter now requires an actual generator object and rejects `itertools.cycle` instances. `examples.ipynb` was updated to match.

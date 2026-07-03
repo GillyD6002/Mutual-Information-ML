@@ -8,6 +8,8 @@
 #   - tensorflow >=2.17 is required for NumPy 2.x and Python 3.12 support.
 #   - tensorflow-datasets supplies the FER-2013 dataset (replacing Tiny Images).
 #   - pillow is used to resize FER-2013 (48x48) down to the 28x28 pipeline size.
+#   - On Windows, use Python 3.13: TensorFlow has no cp314 Windows wheel yet
+#     (stable or nightly). See README.md "A note on Python 3.14".
 
 matplotlib>=3.8
 notebook>=7.0

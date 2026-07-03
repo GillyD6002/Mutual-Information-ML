@@ -1,5 +1,8 @@
 # Direct dependencies. Regenerate the pinned requirements.txt with:
 #   pip-compile requirements.in
+#
+# Use Python 3.13 on Windows: TensorFlow has no Windows wheel (stable or
+# nightly) for Python 3.14 yet. See README.md "A note on Python 3.14".
 matplotlib
 notebook
 numpy>=2.0

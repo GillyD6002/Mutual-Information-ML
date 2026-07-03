@@ -1,7 +1,6 @@
 import configparser
 import ast
 import math
-import itertools
 
 import tensorflow as tf
 from tensorflow import keras as ks
@@ -218,7 +217,16 @@ def get_finite_dataset(images, inner_region, batch_size, loop = True):
             mixed_images = images[mixed_outer_choice]
             mixed_images[:, top:bottom, left:right] = images[mixed_inner_choice][:, top:bottom, left:right]
             joint_images = images[image_choice]
-            yield ([joint_images, mixed_images], [np.zeros(joint_images.shape[0]), np.zeros(mixed_images.shape[0])])
+            yield ((joint_images, mixed_images), (np.zeros(joint_images.shape[0]), np.zeros(mixed_images.shape[0])))
+
+def cycle_generator(generator_fn, *args, **kwargs):
+
+    # Repeatedly re-invokes a finite generator factory, yielding a true
+    # generator object (Keras's data adapters reject itertools.cycle,
+    # which is not a generator instance).
+
+    while True:
+        yield from generator_fn(*args, **kwargs, loop = False)
 
 def run_bipartition(inner_length, alg_settings, param_settings):
 
@@ -247,11 +255,11 @@ def run_bipartition(inner_length, alg_settings, param_settings):
     val_images = images[:val_start]
     batch_size = int(param_settings['batch'])
     
-    train_steps = np.ceil(train_images.shape[0] / batch_size)
-    val_steps = np.ceil(val_images.shape[0] / batch_size)
+    train_steps = int(np.ceil(train_images.shape[0] / batch_size))
+    val_steps = int(np.ceil(val_images.shape[0] / batch_size))
 
     train_itr = get_finite_dataset(train_images, inner_region, batch_size, loop = True)
-    val_itr = itertools.cycle(get_finite_dataset(val_images, inner_region, batch_size, loop = False))
+    val_itr = cycle_generator(get_finite_dataset, val_images, inner_region, batch_size)
 
     net.train(train_itr, val_itr, train_steps, val_steps, int(param_settings['epoch']))
     (est_mi, direct_mi) = net.evaluate_MI(val_itr, 5000)

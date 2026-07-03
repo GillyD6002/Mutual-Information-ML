@@ -478,6 +478,50 @@ def plot_averages(result_specs = None):
     plt.tight_layout()
     plt.savefig("dataset_averages.pdf")
 
+def plot_mi_scaling(results, lengths = None, labels = None, save_path = None):
+
+    # This function plots one or more MI-vs-partition-length curves using
+    # the same figure style as the paper's scaling plots (plot_gaussian,
+    # plot_averages), but operates directly on MI values already held in
+    # memory rather than loading pre-saved trial .npy files. This makes it
+    # suitable for visualizing results computed live in a notebook, e.g. by
+    # looping mine.run_bipartition over a range of partition lengths.
+    #
+    # `results` may be a dict mapping a legend label to a sequence of MI
+    # values, or a plain list/array of such sequences (in which case
+    # `labels` supplies the legend text). Each sequence is assumed to give
+    # the MI estimate for partition lengths starting at 1, unless `lengths`
+    # is provided explicitly.
+
+    fontsize = 14
+    plt.rc("axes", linewidth = 1)
+    (_, axes) = plt.subplots(1, 1, figsize = (10, 6))
+
+    for tick in axes.xaxis.get_major_ticks():
+        tick.label1.set_fontsize(fontsize)
+    for tick in axes.yaxis.get_major_ticks():
+        tick.label1.set_fontsize(fontsize)
+
+    if isinstance(results, dict):
+        (labels, series) = (list(results.keys()), list(results.values()))
+    else:
+        series = list(results)
+        if labels is None:
+            labels = ["Series {}".format(i + 1) for i in range(len(series))]
+
+    for values in series:
+        values = np.asarray(values)
+        plot_lengths = lengths if lengths is not None else np.arange(1, values.shape[0] + 1)
+        axes.plot(plot_lengths, values, linewidth = 2)
+
+    axes.set_xlabel('Partition Length (pixels)', fontsize = fontsize + 2)
+    axes.set_ylabel('Mutual Information (nats)', fontsize = fontsize + 2)
+    axes.legend(labels, fontsize = fontsize + 2)
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path)
+    return axes
+
 def plot_large_small_avg(scaling_type):
 
     # This function creates plots of the MI for the 
