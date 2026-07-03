@@ -18,6 +18,7 @@ This version replaces the original **Tiny Images** dataset (the `tiny` and `gaus
 | `fashion_mnist` | Fashion-MNIST | 28x28 grayscale | 28x28 grayscale |
 | `cifar10` | CIFAR-10 | 32x32 RGB | 28x28 grayscale (luminance + centre crop) |
 | `fer2013` | FER-2013 (facial emotion recognition) | 48x48 grayscale | 28x28 grayscale (resized) |
+| `olivetti_faces` | Olivetti Faces (facial recognition) | 64x64 grayscale | 28x28 grayscale (resized) |
 
 Every real dataset is returned as grayscale floats in `[0, 1]` and conformed to a common 28x28 grid so the rest of the pipeline (partitioning, covariance reshaping, plotting) is unchanged. The target size is configurable via `get_images(..., target_size=N)`.
 
@@ -25,12 +26,16 @@ The Gaussian Markov random field sources (`area`, `diffuse`, `sparse`) and the G
 
 ### A note on FER-2013
 
-MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. FER-2013 is **not** bundled with Keras, so it is loaded through [`tensorflow-datasets`](https://www.tensorflow.org/datasets), which downloads it on first use. If the automatic download is unavailable (it has historically been hosted behind Kaggle auth), pass a path to the standard `fer2013.csv` instead:
+MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. FER-2013 is **not** bundled with Keras, so it is loaded through [`tensorflow-datasets`](https://www.tensorflow.org/datasets), which downloads it on first use. **As of this writing, `fer2013` has been removed from the `tensorflow-datasets` catalog entirely** (`tfds.load("fer2013", ...)` raises `DatasetNotFoundError`), so the automatic path currently always fails; `get_images("fer2013", ...)` is skipped automatically (with a printed message) if this happens. To use it anyway, pass a path to a manually obtained standard `fer2013.csv` instead:
 
 ```python
 from src import image as img
 images, _, _ = img.get_images("fer2013", 70000, fer_csv_path="path/to/fer2013.csv")
 ```
+
+### A note on Olivetti Faces
+
+Because FER-2013 currently requires a manually supplied CSV, `olivetti_faces` is included as a facial dataset that downloads automatically with no account or manual steps (via `sklearn.datasets.fetch_olivetti_faces`, from a stable non-Kaggle mirror). It differs from FER-2013 in two ways worth knowing: it's a face-*recognition* (identity) dataset rather than a facial-*emotion* one, and it's much smaller — only 400 images total (40 subjects x 10 images each) versus FER-2013's ~35,000 — so its MI estimates are noisier than the other datasets' at the same settings.
 
 ## Requirements
 
@@ -43,7 +48,8 @@ pip install -r requirements.txt
 `requirements.txt` lists the direct dependencies with minimum compatible versions; run `pip-compile requirements.in` (from `pip-tools`) to produce a fully pinned lockfile. Key requirements:
 
 - `tensorflow>=2.17` (needed for NumPy 2.x and Python 3.12 support)
-- `tensorflow-datasets` (provides FER-2013)
+- `tensorflow-datasets` (provides FER-2013, when available)
+- `scikit-learn` (provides Olivetti Faces)
 - `numpy>=2.0`, `matplotlib`, `pillow`, `notebook`
 
 ### A note on Python 3.14
@@ -74,3 +80,6 @@ python -m src.mine
 - That section now plots the *direct* MI estimate rather than the *indirect* (Donsker-Varadhan-style) one, matching how the original paper's own real-dataset figures (`plot_averages`) were generated. The indirect estimate's `log(mean(exp(...)))` term is much more sensitive to noisy batches and can dip below zero even though MI is analytically non-negative; the direct estimate (a plain mean of classifier logits) is far more stable. `image.plot_mi_scaling` also gained a `clip_negative` option (used here) to floor any residual noise-driven negative values at zero.
 - `mine.run_bipartition` gained an optional `eval_steps` argument (default 5000, unchanged) so the number of validation batches averaged over in `evaluate_MI` can be reduced to match a smaller `num_images`, instead of always evaluating over 5000 batches regardless of dataset size.
 - The notebook's real-dataset sweep now uses reduced settings (10,000 images, up to 30 epochs, patience 8, 400 eval steps) instead of the paper's full scale (70,000 images, up to 3,000 epochs, see `mine.ini`), so the 27-length sweep across multiple datasets finishes in minutes rather than hours. Raise these values for higher-fidelity curves closer to the published figures.
+- Added `olivetti_faces` (via `sklearn.datasets.fetch_olivetti_faces`) as a working facial dataset in `src/image.py`, and included it in the notebook's real-dataset sweep, since FER-2013 currently can't be loaded automatically (see "A note on FER-2013" above). Added `scikit-learn` to `requirements.in`/`requirements.txt`.
+- `examples.ipynb`'s Gaussian Markov random field section gained two new live-computed cells after the static reference figures: (1) the *exact* analytic MI curves for all three field types at both correlation strengths, computed instantly from the closed-form Gaussian formula (`image.get_analytic_MI`) with no training; and (2) a validation plot overlaying the neural estimator's *direct* MI estimate (swept across all 27 partition lengths, same reduced settings as the real-dataset sweep) against that exact curve for the `diffuse`/`large` field, to demonstrate the estimator actually recovers the known value.
+- Fixed a notebook-format bug where several cells' `source` field had been written as a single raw string instead of a list of lines (both are valid per the nbformat spec, but the string form rendered as blank/invisible cell input in VS Code's notebook editor even though the cells still executed correctly).

@@ -7,5 +7,6 @@ matplotlib
 notebook
 numpy>=2.0
 pillow
+scikit-learn              # provides the Olivetti Faces facial-recognition dataset
 tensorflow>=2.17          # >=2.17 supports NumPy 2.x and Python 3.12
-tensorflow-datasets       # provides the FER-2013 facial-emotion dataset
+tensorflow-datasets       # provides real datasets (FER-2013, when available)

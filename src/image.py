@@ -278,6 +278,18 @@ def _load_fer2013_csv(csv_path, num_images):
     images = np.stack(pixel_rows).reshape([-1, 48, 48])
     return images
 
+def _load_olivetti_faces():
+
+    # This helper loads the Olivetti Faces dataset (400 grayscale face
+    # images, 10 each from 40 subjects) via scikit-learn. Unlike FER-2013,
+    # it downloads automatically from a stable, non-Kaggle mirror with no
+    # manual steps, but it is a face-recognition (identity) dataset rather
+    # than a facial-emotion dataset, and much smaller (400 images total).
+
+    from sklearn.datasets import fetch_olivetti_faces
+    data = fetch_olivetti_faces()
+    return data.images
+
 def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMAGE_SIZE,
         fer_csv_path = None, fer_data_dir = None):
 
@@ -309,6 +321,13 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
     elif source == 'fer2013':
         images = _load_fer2013(num_images, data_dir = fer_data_dir, csv_path = fer_csv_path) / 255
         # FER-2013 images are 48 x 48, so they are resized down to the target.
+        images = conform_size(images, target_size, mode = "resize")
+        cov = np.eye(images.shape[1] * images.shape[2])
+        mean = np.zeros(images.shape[1] * images.shape[2])
+    elif source == 'olivetti_faces':
+        images = _load_olivetti_faces()[:num_images]
+        # Olivetti Faces are 64 x 64 and already in [0, 1], so they are
+        # resized down to the target (only 400 images exist in total).
         images = conform_size(images, target_size, mode = "resize")
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
