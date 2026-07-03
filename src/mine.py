@@ -228,10 +228,13 @@ def cycle_generator(generator_fn, *args, **kwargs):
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
-def run_bipartition(inner_length, alg_settings, param_settings):
+def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000):
 
     # This function runs the MI estimation experiment using the
-    # provided settings and partition size.
+    # provided settings and partition size. eval_steps controls how many
+    # validation batches evaluate_MI averages over; the default of 5000
+    # matches the paper's full-scale runs, but a smaller value is more
+    # appropriate when num_images has been reduced for a quicker demo.
 
     num_images = max(1, int(alg_settings["num_images"]))
     (images, _, _) = img.get_images(
@@ -262,7 +265,7 @@ def run_bipartition(inner_length, alg_settings, param_settings):
     val_itr = cycle_generator(get_finite_dataset, val_images, inner_region, batch_size)
 
     net.train(train_itr, val_itr, train_steps, val_steps, int(param_settings['epoch']))
-    (est_mi, direct_mi) = net.evaluate_MI(val_itr, 5000)
+    (est_mi, direct_mi) = net.evaluate_MI(val_itr, eval_steps)
     return [est_mi, direct_mi]
 
 if __name__ == "__main__":

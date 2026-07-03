@@ -478,7 +478,7 @@ def plot_averages(result_specs = None):
     plt.tight_layout()
     plt.savefig("dataset_averages.pdf")
 
-def plot_mi_scaling(results, lengths = None, labels = None, save_path = None):
+def plot_mi_scaling(results, lengths = None, labels = None, save_path = None, clip_negative = False):
 
     # This function plots one or more MI-vs-partition-length curves using
     # the same figure style as the paper's scaling plots (plot_gaussian,
@@ -492,6 +492,11 @@ def plot_mi_scaling(results, lengths = None, labels = None, save_path = None):
     # `labels` supplies the legend text). Each sequence is assumed to give
     # the MI estimate for partition lengths starting at 1, unless `lengths`
     # is provided explicitly.
+    #
+    # MI is analytically non-negative, so any negative values in an
+    # estimated (as opposed to exact analytic) curve are finite-sample
+    # noise rather than real signal. Set clip_negative = True to floor the
+    # plotted curves at zero for empirical estimates.
 
     fontsize = 14
     plt.rc("axes", linewidth = 1)
@@ -511,6 +516,8 @@ def plot_mi_scaling(results, lengths = None, labels = None, save_path = None):
 
     for values in series:
         values = np.asarray(values)
+        if clip_negative:
+            values = np.clip(values, 0, None)
         plot_lengths = lengths if lengths is not None else np.arange(1, values.shape[0] + 1)
         axes.plot(plot_lengths, values, linewidth = 2)
 
