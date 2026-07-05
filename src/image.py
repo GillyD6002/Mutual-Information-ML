@@ -175,6 +175,46 @@ def convert_to_grayscale(images):
         images = images[..., 0]
     return images
 
+def shuffle_pixels_independent(images, seed = None):
+
+    # This function applies a different random pixel permutation to each
+    # image independently. A given pixel *position* therefore no longer
+    # corresponds to any consistent original location from one image to the
+    # next, which destroys the correlation between the inner and outer
+    # patches used elsewhere in this module (see get_center_region):
+    # whatever ends up in the "inner" region of one image came from a
+    # completely unrelated random subset of pixels than in any other image.
+
+    images = np.asarray(images)
+    (num_images, height, width) = images.shape
+    rand = np.random.RandomState(seed)
+    flat = images.reshape(num_images, height * width)
+    shuffled = np.empty_like(flat)
+    for i in range(num_images):
+        shuffled[i] = flat[i, rand.permutation(height * width)]
+    return shuffled.reshape(num_images, height, width)
+
+def shuffle_pixels_shared(images, seed = 123456789):
+
+    # This function applies the *same* random pixel permutation to every
+    # image, analogous to how get_sparse_volume_cov permutes a
+    # nearest-neighbor precision matrix once and reuses that one permutation
+    # everywhere. Real spatial correlations between nearby original pixels
+    # are preserved, since the same original pair of positions always maps
+    # to the same (now scattered) pair of positions across every image, but
+    # the "inner square patch" bipartition used elsewhere in this module now
+    # cuts through a randomized, non-local subset of the original pixel
+    # grid rather than a spatially contiguous one.
+
+    images = np.asarray(images)
+    (_, height, width) = images.shape
+    rand = np.random.RandomState(seed)
+    permutation = rand.permutation(height * width)
+    num_images = images.shape[0]
+    flat = images.reshape(num_images, height * width)
+    shuffled = flat[:, permutation]
+    return shuffled.reshape(num_images, height, width)
+
 def center_crop(images, size):
 
     # This function extracts a centered square patch of the given side
@@ -271,6 +311,26 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
         # LFW images are already grayscale floats in [0, 1], so they are
         # resized down to the target from their native (125 x 94) size.
         images = conform_size(images, target_size, mode = "resize")
+        cov = np.eye(images.shape[1] * images.shape[2])
+        mean = np.zeros(images.shape[1] * images.shape[2])
+    elif source == 'cifar10_shuffle_independent':
+        images = _load_keras_dataset("cifar10")[:num_images] / 255
+        images = convert_to_grayscale(images)
+        images = conform_size(images, target_size, mode = "crop")
+        # A different random pixel permutation per image destroys any
+        # dataset-wide correlation between fixed pixel positions.
+        images = shuffle_pixels_independent(images)
+        cov = np.eye(images.shape[1] * images.shape[2])
+        mean = np.zeros(images.shape[1] * images.shape[2])
+    elif source == 'cifar10_shuffle_shared':
+        images = _load_keras_dataset("cifar10")[:num_images] / 255
+        images = convert_to_grayscale(images)
+        images = conform_size(images, target_size, mode = "crop")
+        # The same random pixel permutation for every image preserves real
+        # pixel-to-pixel correlations, just scattered to random positions
+        # instead of local ones - a real-image analog of the "sparse"
+        # (randomized boundary-law) GMRF.
+        images = shuffle_pixels_shared(images)
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
     elif source == 'gauss_mnist':

@@ -18,6 +18,8 @@ This version replaces the original **Tiny Images** dataset (the `tiny` and `gaus
 | `fashion_mnist` | Fashion-MNIST | 28x28 grayscale | 28x28 grayscale |
 | `cifar10` | CIFAR-10 | 32x32 RGB | 28x28 grayscale (luminance + centre crop) |
 | `lfw_faces` | LFW - Labeled Faces in the Wild (facial recognition) | 125x94 grayscale | 28x28 grayscale (resized) |
+| `cifar10_shuffle_independent` | CIFAR-10 with a *different* random pixel permutation per image | 28x28 grayscale | 28x28 grayscale |
+| `cifar10_shuffle_shared` | CIFAR-10 with the *same* random pixel permutation for every image | 28x28 grayscale | 28x28 grayscale |
 
 Every real dataset is returned as grayscale floats in `[0, 1]` and conformed to a common 28x28 grid so the rest of the pipeline (partitioning, covariance reshaping, plotting) is unchanged. The target size is configurable via `get_images(..., target_size=N)`.
 
@@ -28,6 +30,13 @@ The Gaussian Markov random field sources (`area`, `diffuse`, `sparse`) and the G
 MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. `lfw_faces` is loaded through [`scikit-learn`](https://scikit-learn.org/stable/datasets/real_world.html#labeled-faces-in-the-wild-dataset) (`sklearn.datasets.fetch_lfw_people`), which downloads it automatically from a stable, non-Kaggle mirror with no account or manual steps. It's large enough (13,000+ images across ~5,700 people) that its MI estimates are comparable in scale to the other datasets, unlike the much smaller Olivetti Faces dataset (400 images) it replaced during development, which produced noisy, squashed-flat estimates at the same settings.
 
 Note that `lfw_faces` is a face-*recognition* (identity) dataset, not a facial-*emotion* one — this project originally used FER-2013 for that purpose, but FER-2013 has since been removed from the `tensorflow-datasets` catalog entirely and is no longer supported here.
+
+### A note on `cifar10_shuffle_independent` / `cifar10_shuffle_shared`
+
+Real image datasets almost never show the "sparse, randomized" scaling pattern that the synthetic `sparse` GMRF was built to test (nearest-neighbor correlations scattered to random positions by a one-time permutation - see `get_sparse_volume_cov`). These two sources build a real-data analog directly from CIFAR-10 using `image.shuffle_pixels_independent` and `image.shuffle_pixels_shared`:
+
+- `cifar10_shuffle_independent` permutes each image's pixels with its own independent random permutation, which should destroy most of the *positional* correlation between the inner and outer patches (a given pixel position no longer maps to a consistent original location across images). It doesn't drive the MI all the way to zero, though: a permutation preserves each image's own pixel-value multiset, so a residual "do these two patches share the same overall brightness/contrast" signal survives.
+- `cifar10_shuffle_shared` applies the same permutation to every image, directly mirroring the synthetic `sparse` field's construction. Real pixel-to-pixel correlations are preserved, just scattered to non-local positions - which in practice produces *higher* MI than unshuffled CIFAR-10, since a fixed-size inner/outer square cut now severs a much larger fraction of the (now scattered) correlated pixel pairs than it would in the original, spatially-compact image.
 
 ## Requirements
 
@@ -75,3 +84,4 @@ python -m src.mine
 - Removed FER-2013 support entirely (`_load_fer2013`/`_load_fer2013_csv` in `src/image.py`, the `fer_csv_path`/`fer_data_dir` arguments to `get_images`, and the `tensorflow-datasets` dependency): FER-2013 has been removed from the `tensorflow-datasets` catalog and can no longer be loaded automatically, and LFW now covers the facial-dataset role instead.
 - `examples.ipynb`'s Gaussian Markov random field section gained two new live-computed cells after the static reference figures: (1) the *exact* analytic MI curves for all three field types at both correlation strengths, computed instantly from the closed-form Gaussian formula (`image.get_analytic_MI`) with no training; and (2) a validation plot overlaying the neural estimator's *direct* MI estimate (swept across all 27 partition lengths, same reduced settings as the real-dataset sweep) against that exact curve for the `diffuse`/`large` field, to demonstrate the estimator actually recovers the known value.
 - Fixed a notebook-format bug where several cells' `source` field had been written as a single raw string instead of a list of lines (both are valid per the nbformat spec, but the string form rendered as blank/invisible cell input in VS Code's notebook editor even though the cells still executed correctly).
+- Added `image.shuffle_pixels_independent` and `image.shuffle_pixels_shared`, plus two new `get_images` sources built on them (`cifar10_shuffle_independent`, `cifar10_shuffle_shared`), as a real-data analog of the synthetic `sparse` (randomized boundary-law) GMRF test. `examples.ipynb` gained a new section sweeping both across all 27 partition lengths and plotting them against unshuffled CIFAR-10 (`cifar10_shuffle_scaling.pdf`).
