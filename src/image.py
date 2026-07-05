@@ -6,9 +6,9 @@ import matplotlib.patches as mpatches
 # This module is used to process image data for the MI estimation task. Note that
 # much of the code here is non-functional without the associated data.
 #
-# TensorFlow / tensorflow-datasets are imported lazily inside the loading
-# functions so that the Gaussian-field and plotting utilities in this module
-# can be used without a TensorFlow installation.
+# TensorFlow / scikit-learn are imported lazily inside the loading functions
+# so that the Gaussian-field and plotting utilities in this module can be
+# used without those installed.
 
 rho_values = { # These are the correlation values for the Gaussiam Markov fields
     "area": {"small": -0.12, "large": -0.227},
@@ -228,77 +228,25 @@ def _load_keras_dataset(name):
     images = np.concatenate([train_images, test_images], axis = 0)
     return images
 
-def _load_fer2013(num_images, data_dir = None, csv_path = None):
+def _load_lfw_faces():
 
-    # This helper loads the FER-2013 facial-emotion-recognition images
-    # (48 x 48 grayscale). It prefers tensorflow-datasets, and falls back to
-    # reading the standard fer2013.csv file if tensorflow-datasets or its
-    # download is unavailable. Set csv_path to point at a local fer2013.csv.
+    # This helper loads the Labeled Faces in the Wild (LFW) dataset (over
+    # 13,000 grayscale face images across roughly 5,700 people) via
+    # scikit-learn. It downloads automatically from a stable, non-Kaggle
+    # mirror with no manual steps.
 
-    try:
-        import tensorflow_datasets as tfds
-        splits = ["train", "test"]
-        arrays = []
-        for split in splits:
-            data = tfds.load(
-                "fer2013",
-                split = split,
-                data_dir = data_dir,
-                as_supervised = True,
-                batch_size = -1)
-            (split_images, _) = tfds.as_numpy(data)
-            arrays.append(split_images)
-        images = np.concatenate(arrays, axis = 0)
-        return images[:num_images]
-    except Exception as tfds_error:
-        if csv_path is None:
-            raise RuntimeError(
-                "Could not load FER-2013 through tensorflow-datasets "
-                f"({tfds_error}). Provide csv_path=<path to fer2013.csv> "
-                "to load it from the local CSV instead.")
-        return _load_fer2013_csv(csv_path, num_images)
-
-def _load_fer2013_csv(csv_path, num_images):
-
-    # This helper parses the pixel strings in a standard fer2013.csv file into
-    # a stack of 48 x 48 grayscale images.
-
-    pixel_rows = []
-    with open(csv_path, "r") as handle:
-        header = handle.readline().strip().split(",")
-        pixel_column = header.index("pixels")
-        for line in handle:
-            if not line.strip():
-                continue
-            fields = line.rstrip("\n").split(",")
-            pixels = np.fromstring(fields[pixel_column].strip('"'), sep = " ")
-            pixel_rows.append(pixels)
-            if len(pixel_rows) >= num_images:
-                break
-    images = np.stack(pixel_rows).reshape([-1, 48, 48])
-    return images
-
-def _load_olivetti_faces():
-
-    # This helper loads the Olivetti Faces dataset (400 grayscale face
-    # images, 10 each from 40 subjects) via scikit-learn. Unlike FER-2013,
-    # it downloads automatically from a stable, non-Kaggle mirror with no
-    # manual steps, but it is a face-recognition (identity) dataset rather
-    # than a facial-emotion dataset, and much smaller (400 images total).
-
-    from sklearn.datasets import fetch_olivetti_faces
-    data = fetch_olivetti_faces()
+    from sklearn.datasets import fetch_lfw_people
+    data = fetch_lfw_people(min_faces_per_person = 1, resize = 1.0)
     return data.images
 
-def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMAGE_SIZE,
-        fer_csv_path = None, fer_data_dir = None):
+def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMAGE_SIZE):
 
     # This function retrieves images from the specified dataset, as
     # well as the mean and covatiance from the Gaussian image sets.
     #
-    # Real image datasets ("mnist", "fashion_mnist", "cifar10", "fer2013") are
-    # returned as grayscale floats in [0, 1], conformed to target_size, with
-    # placeholder identity covariance / zero mean (they are not Gaussian).
+    # Real image datasets ("mnist", "fashion_mnist", "cifar10", "lfw_faces")
+    # are returned as grayscale floats in [0, 1], conformed to target_size,
+    # with placeholder identity covariance / zero mean (they are not Gaussian).
 
     if source == 'mnist':
         images = _load_keras_dataset("mnist")[:num_images] / 255
@@ -318,16 +266,10 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
         images = conform_size(images, target_size, mode = "crop")
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
-    elif source == 'fer2013':
-        images = _load_fer2013(num_images, data_dir = fer_data_dir, csv_path = fer_csv_path) / 255
-        # FER-2013 images are 48 x 48, so they are resized down to the target.
-        images = conform_size(images, target_size, mode = "resize")
-        cov = np.eye(images.shape[1] * images.shape[2])
-        mean = np.zeros(images.shape[1] * images.shape[2])
-    elif source == 'olivetti_faces':
-        images = _load_olivetti_faces()[:num_images]
-        # Olivetti Faces are 64 x 64 and already in [0, 1], so they are
-        # resized down to the target (only 400 images exist in total).
+    elif source == 'lfw_faces':
+        images = _load_lfw_faces()[:num_images]
+        # LFW images are already grayscale floats in [0, 1], so they are
+        # resized down to the target from their native (125 x 94) size.
         images = conform_size(images, target_size, mode = "resize")
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])

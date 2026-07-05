@@ -17,25 +17,17 @@ This version replaces the original **Tiny Images** dataset (the `tiny` and `gaus
 | `mnist` | MNIST digits | 28x28 grayscale | 28x28 grayscale |
 | `fashion_mnist` | Fashion-MNIST | 28x28 grayscale | 28x28 grayscale |
 | `cifar10` | CIFAR-10 | 32x32 RGB | 28x28 grayscale (luminance + centre crop) |
-| `fer2013` | FER-2013 (facial emotion recognition) | 48x48 grayscale | 28x28 grayscale (resized) |
-| `olivetti_faces` | Olivetti Faces (facial recognition) | 64x64 grayscale | 28x28 grayscale (resized) |
+| `lfw_faces` | LFW - Labeled Faces in the Wild (facial recognition) | 125x94 grayscale | 28x28 grayscale (resized) |
 
 Every real dataset is returned as grayscale floats in `[0, 1]` and conformed to a common 28x28 grid so the rest of the pipeline (partitioning, covariance reshaping, plotting) is unchanged. The target size is configurable via `get_images(..., target_size=N)`.
 
 The Gaussian Markov random field sources (`area`, `diffuse`, `sparse`) and the Gaussian fit to MNIST (`gauss_mnist`) are unchanged.
 
-### A note on FER-2013
+### A note on LFW (Labeled Faces in the Wild)
 
-MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. FER-2013 is **not** bundled with Keras, so it is loaded through [`tensorflow-datasets`](https://www.tensorflow.org/datasets), which downloads it on first use. **As of this writing, `fer2013` has been removed from the `tensorflow-datasets` catalog entirely** (`tfds.load("fer2013", ...)` raises `DatasetNotFoundError`), so the automatic path currently always fails; `get_images("fer2013", ...)` is skipped automatically (with a printed message) if this happens. To use it anyway, pass a path to a manually obtained standard `fer2013.csv` instead:
+MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. `lfw_faces` is loaded through [`scikit-learn`](https://scikit-learn.org/stable/datasets/real_world.html#labeled-faces-in-the-wild-dataset) (`sklearn.datasets.fetch_lfw_people`), which downloads it automatically from a stable, non-Kaggle mirror with no account or manual steps. It's large enough (13,000+ images across ~5,700 people) that its MI estimates are comparable in scale to the other datasets, unlike the much smaller Olivetti Faces dataset (400 images) it replaced during development, which produced noisy, squashed-flat estimates at the same settings.
 
-```python
-from src import image as img
-images, _, _ = img.get_images("fer2013", 70000, fer_csv_path="path/to/fer2013.csv")
-```
-
-### A note on Olivetti Faces
-
-Because FER-2013 currently requires a manually supplied CSV, `olivetti_faces` is included as a facial dataset that downloads automatically with no account or manual steps (via `sklearn.datasets.fetch_olivetti_faces`, from a stable non-Kaggle mirror). It differs from FER-2013 in two ways worth knowing: it's a face-*recognition* (identity) dataset rather than a facial-*emotion* one, and it's much smaller — only 400 images total (40 subjects x 10 images each) versus FER-2013's ~35,000 — so its MI estimates are noisier than the other datasets' at the same settings.
+Note that `lfw_faces` is a face-*recognition* (identity) dataset, not a facial-*emotion* one — this project originally used FER-2013 for that purpose, but FER-2013 has since been removed from the `tensorflow-datasets` catalog entirely and is no longer supported here.
 
 ## Requirements
 
@@ -48,8 +40,7 @@ pip install -r requirements.txt
 `requirements.txt` lists the direct dependencies with minimum compatible versions; run `pip-compile requirements.in` (from `pip-tools`) to produce a fully pinned lockfile. Key requirements:
 
 - `tensorflow>=2.17` (needed for NumPy 2.x and Python 3.12 support)
-- `tensorflow-datasets` (provides FER-2013, when available)
-- `scikit-learn` (provides Olivetti Faces)
+- `scikit-learn` (provides LFW)
 - `numpy>=2.0`, `matplotlib`, `pillow`, `notebook`
 
 ### A note on Python 3.14
@@ -66,7 +57,7 @@ python -m src.mine
 
 ## What changed in this update
 
-- Replaced the Tiny Images dataset with CIFAR-10, Fashion-MNIST, and FER-2013 in `src/image.py`.
+- Replaced the Tiny Images dataset with CIFAR-10, Fashion-MNIST, and LFW (facial recognition) in `src/image.py`.
 - Removed the TensorFlow 1.x calls that no longer exist in TensorFlow 2.x (`tf.log` -> `tf.math.log`, removed `tf.reset_default_graph()`).
 - Updated model construction and optimizers for Keras 3 (explicit `Input` layer, `learning_rate=` keyword).
 - Made the TensorFlow import lazy so the Gaussian-field and plotting utilities work without TensorFlow installed.
@@ -76,10 +67,11 @@ python -m src.mine
   - `get_finite_dataset` now yields `(inputs, targets)` as tuples instead of lists — Keras's generator adapter now infers a `tf.TypeSpec` per input and rejects plain lists.
   - `train_steps`/`val_steps` are now cast to `int` (`np.ceil` returns a `numpy.float64`, which the newer epoch iterator no longer accepts in `range()`).
   - Added `mine.cycle_generator`, replacing `itertools.cycle(...)` for repeating the validation generator — Keras's adapter now requires an actual generator object and rejects `itertools.cycle` instances. `examples.ipynb` was updated to match.
-- `examples.ipynb`'s "Visualizing the scaling for a real dataset" section now sweeps **all** available real datasets (MNIST, Fashion-MNIST, CIFAR-10, FER-2013) instead of only MNIST, plotting them together with `image.plot_mi_scaling`. FER-2013 is skipped automatically (with a printed note) if it can't be loaded.
+- `examples.ipynb`'s "Visualizing the scaling for a real dataset" section now sweeps **all** available real datasets (MNIST, Fashion-MNIST, CIFAR-10, LFW) instead of only MNIST, plotting them together with `image.plot_mi_scaling`.
 - That section now plots the *direct* MI estimate rather than the *indirect* (Donsker-Varadhan-style) one, matching how the original paper's own real-dataset figures (`plot_averages`) were generated. The indirect estimate's `log(mean(exp(...)))` term is much more sensitive to noisy batches and can dip below zero even though MI is analytically non-negative; the direct estimate (a plain mean of classifier logits) is far more stable. `image.plot_mi_scaling` also gained a `clip_negative` option (used here) to floor any residual noise-driven negative values at zero.
 - `mine.run_bipartition` gained an optional `eval_steps` argument (default 5000, unchanged) so the number of validation batches averaged over in `evaluate_MI` can be reduced to match a smaller `num_images`, instead of always evaluating over 5000 batches regardless of dataset size.
 - The notebook's real-dataset sweep now uses reduced settings (10,000 images, up to 30 epochs, patience 8, 400 eval steps) instead of the paper's full scale (70,000 images, up to 3,000 epochs, see `mine.ini`), so the 27-length sweep across multiple datasets finishes in minutes rather than hours. Raise these values for higher-fidelity curves closer to the published figures.
-- Added `olivetti_faces` (via `sklearn.datasets.fetch_olivetti_faces`) as a working facial dataset in `src/image.py`, and included it in the notebook's real-dataset sweep, since FER-2013 currently can't be loaded automatically (see "A note on FER-2013" above). Added `scikit-learn` to `requirements.in`/`requirements.txt`. Since its MI values are much smaller than the other datasets' (only 400 images total vs. 10,000), it's squashed flat on the shared-axis comparison plot; the notebook now also plots it alone on its own axis (`olivetti_faces_scaling.pdf`) so its shape is visible.
+- Added `lfw_faces` (via `sklearn.datasets.fetch_lfw_people`) as a working facial dataset in `src/image.py`, and included it in the notebook's real-dataset sweep. Added `scikit-learn` to `requirements.in`/`requirements.txt`. This replaced an earlier attempt using the much smaller Olivetti Faces dataset (400 images), whose MI estimates were noisy and squashed flat on the shared-axis comparison plot; LFW's 13,000+ images give comparable-magnitude, much less noisy estimates. The notebook still also plots it alone on its own axis (`lfw_faces_scaling.pdf`) to check.
+- Removed FER-2013 support entirely (`_load_fer2013`/`_load_fer2013_csv` in `src/image.py`, the `fer_csv_path`/`fer_data_dir` arguments to `get_images`, and the `tensorflow-datasets` dependency): FER-2013 has been removed from the `tensorflow-datasets` catalog and can no longer be loaded automatically, and LFW now covers the facial-dataset role instead.
 - `examples.ipynb`'s Gaussian Markov random field section gained two new live-computed cells after the static reference figures: (1) the *exact* analytic MI curves for all three field types at both correlation strengths, computed instantly from the closed-form Gaussian formula (`image.get_analytic_MI`) with no training; and (2) a validation plot overlaying the neural estimator's *direct* MI estimate (swept across all 27 partition lengths, same reduced settings as the real-dataset sweep) against that exact curve for the `diffuse`/`large` field, to demonstrate the estimator actually recovers the known value.
 - Fixed a notebook-format bug where several cells' `source` field had been written as a single raw string instead of a list of lines (both are valid per the nbformat spec, but the string form rendered as blank/invisible cell input in VS Code's notebook editor even though the cells still executed correctly).
