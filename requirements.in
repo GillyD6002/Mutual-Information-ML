@@ -3,7 +3,9 @@
 #
 # Use Python 3.13 on Windows: TensorFlow has no Windows wheel (stable or
 # nightly) for Python 3.14 yet. See README.md "A note on Python 3.14".
+gensim                    # provides pretrained GloVe embeddings for src/language.py
 matplotlib
+nltk                      # provides the Gutenberg text corpus for src/language.py
 notebook
 numpy>=2.0
 pillow
