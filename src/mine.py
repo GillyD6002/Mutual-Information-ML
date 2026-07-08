@@ -228,19 +228,25 @@ def cycle_generator(generator_fn, *args, **kwargs):
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
-def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000):
+def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE):
 
     # This function runs the MI estimation experiment using the
     # provided settings and partition size. eval_steps controls how many
     # validation batches evaluate_MI averages over; the default of 5000
     # matches the paper's full-scale runs, but a smaller value is more
     # appropriate when num_images has been reduced for a quicker demo.
+    # target_size is passed straight through to img.get_images and defaults
+    # to the same 28x28 every existing caller already relies on, so this is
+    # purely additive - existing alg.ini/mine.ini-driven runs and notebook
+    # cells are unaffected. Pass a larger value to train on less-aggressively
+    # downsized images (e.g. a dataset's native resolution).
 
     num_images = max(1, int(alg_settings["num_images"]))
     (images, _, _) = img.get_images(
-        alg_settings["image_type"], 
-        num_images, 
-        strength = alg_settings["strength"])
+        alg_settings["image_type"],
+        num_images,
+        strength = alg_settings["strength"],
+        target_size = target_size)
     (_, height, width) = images.shape
     images = np.expand_dims(images, axis = 3)
     inner_region = img.get_center_region(inner_length, height, width)

@@ -215,18 +215,3 @@ def get_embedded_sequences(num_sequences = DEFAULT_NUM_SEQUENCES, num_points = D
     cov = np.eye(num_points * embedding_dim)
     mean = np.zeros(num_points * embedding_dim)
     return (sequences, cov, mean)
-
-def shuffle_word_order(sequences, seed = None):
-
-    # Negative-control helper: independently shuffles the WORD ORDER within
-    # each sequence, destroying positional/sequential structure while
-    # preserving each sequence's own multiset of (log-rank) values -
-    # directly analogous to image.shuffle_pixels_independent. Used to
-    # check that any MI found by the main experiment reflects genuine
-    # sequential dependence, not just a "bag of words" artifact.
-
-    rand = np.random.RandomState(seed)
-    shuffled = np.empty_like(sequences)
-    for i in range(sequences.shape[0]):
-        shuffled[i] = sequences[i, rand.permutation(sequences.shape[1])]
-    return shuffled

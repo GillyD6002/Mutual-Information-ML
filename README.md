@@ -18,10 +18,11 @@ This version replaces the original **Tiny Images** dataset (the `tiny` and `gaus
 | `fashion_mnist` | Fashion-MNIST | 28x28 grayscale | 28x28 grayscale |
 | `cifar10` | CIFAR-10 | 32x32 RGB | 28x28 grayscale (luminance + centre crop) |
 | `lfw_faces` | LFW - Labeled Faces in the Wild (facial recognition) | 125x94 grayscale | 28x28 grayscale (resized) |
-| `cifar10_shuffle_independent` | CIFAR-10 with a *different* random pixel permutation per image | 28x28 grayscale | 28x28 grayscale |
-| `cifar10_shuffle_shared` | CIFAR-10 with the *same* random pixel permutation for every image | 28x28 grayscale | 28x28 grayscale |
+| `fer2013_hf` | FER-2013 (facial *emotion* recognition, 7 classes) | 48x48 grayscale | 28x28 grayscale (centre crop) |
+| `mnist_shuffle_independent` | MNIST with a *different* random pixel permutation per image | 28x28 grayscale | 28x28 grayscale |
+| `mnist_shuffle_shared` | MNIST with the *same* random pixel permutation for every image | 28x28 grayscale | 28x28 grayscale |
 
-Every real dataset is returned as grayscale floats in `[0, 1]` and conformed to a common 28x28 grid so the rest of the pipeline (partitioning, covariance reshaping, plotting) is unchanged. The target size is configurable via `get_images(..., target_size=N)`.
+Every real dataset is returned as grayscale floats in `[0, 1]` and conformed to a common 28x28 grid so the rest of the pipeline (partitioning, covariance reshaping, plotting) is unchanged. The target size is configurable via `get_images(..., target_size=N)`, and `mine.run_bipartition(..., target_size=N)` passes it straight through (defaulting to 28, so every existing caller is unaffected) - see "Non-cropped MI scaling" below for why this matters.
 
 The Gaussian Markov random field sources (`area`, `diffuse`, `sparse`) and the Gaussian fit to MNIST (`gauss_mnist`) are unchanged.
 
@@ -29,14 +30,62 @@ The Gaussian Markov random field sources (`area`, `diffuse`, `sparse`) and the G
 
 MNIST, Fashion-MNIST, and CIFAR-10 ship with Keras and download on first use. `lfw_faces` is loaded through [`scikit-learn`](https://scikit-learn.org/stable/datasets/real_world.html#labeled-faces-in-the-wild-dataset) (`sklearn.datasets.fetch_lfw_people`), which downloads it automatically from a stable, non-Kaggle mirror with no account or manual steps. It's large enough (13,000+ images across ~5,700 people) that its MI estimates are comparable in scale to the other datasets, unlike the much smaller Olivetti Faces dataset (400 images) it replaced during development, which produced noisy, squashed-flat estimates at the same settings.
 
+### A note on FER-2013 (`fer2013_hf`)
+
+FER-2013 was removed from this project once (see the changelog below) because it had been pulled from the `tensorflow-datasets` catalog and its original Kaggle hosting is unreliable. It's back via a Hugging Face Hub mirror instead: [`clip-benchmark/wds_fer2013`](https://huggingface.co/datasets/clip-benchmark/wds_fer2013), loaded with the `datasets` library (`datasets.load_dataset("clip-benchmark/wds_fer2013")`). This mirror was chosen over several other community re-uploads found on the Hub because it stores plain 48x48 grayscale JPEGs in the standard webdataset format - no custom loading script or `trust_remote_code` needed - and its train (28,709) + test (7,178) splits sum to exactly 35,887 images, matching the canonical FER-2013 dataset size. Unlike `lfw_faces` (identity labels), this restores genuine facial *emotion* labels (7 classes), though the labels themselves aren't used here since only the images matter for MI estimation.
+
+## Non-cropped MI scaling
+
+The default 28x28 pipeline throws away real information for every real dataset that isn't already natively 28x28: CIFAR-10's 32x32 images are centre-cropped, and LFW's 125x94 and FER-2013's 48x48 images are resized down. `src/image_noncrop_experiment.py` re-runs the same MI-vs-partition-length sweep as `examples.ipynb`'s real-dataset section, but at each dataset's own native (or best achievable square) resolution instead of 28x28, and sweeps the *entire* image (length 1 up to and including `target_size`) rather than stopping at 27. At length = `target_size` the inner patch is the whole image and the outer patch is empty, so MI necessarily collapses back to ~0 there (there's nothing left for the classifier to discriminate) - this is an expected, meaningful boundary condition, not a bug, and it's what makes the resulting curves show a full rise-then-fall shape instead of an arbitrary truncation mid-rise.
+
+| `image_type` | non-cropped `target_size` | why |
+| --- | --- | --- |
+| `cifar10` | 32 | native size - `conform_size` becomes a no-op, zero cropping |
+| `lfw_faces` | 94 | the larger square achievable without upsampling either of its 125x94 dimensions |
+| `fer2013_hf` | 48 | native size - `conform_size` becomes a no-op, zero resizing |
+
+MNIST/Fashion-MNIST are excluded since they're already natively 28x28 - there's no cropping to undo for them. Results (raw `.npy` arrays and a combined scaling plot in the same `image.plot_mi_scaling` style as the rest of this project) are saved to `image_noncrop_results/`. Run it with:
+
+```bash
+python -m src.image_noncrop_experiment
+```
+
+It reuses `mine.run_bipartition`/`img.get_images` unmodified aside from the additive `target_size` argument described above - the training procedure itself is identical to the cropped 28x28 sweep, just on larger inputs, so it takes proportionally longer (still on the order of tens of minutes rather than hours on a CPU-only machine, per a timing check before committing to the full sweep - see the script's module docstring for the actual numbers).
+
 Note that `lfw_faces` is a face-*recognition* (identity) dataset, not a facial-*emotion* one — this project originally used FER-2013 for that purpose, but FER-2013 has since been removed from the `tensorflow-datasets` catalog entirely and is no longer supported here.
 
-### A note on `cifar10_shuffle_independent` / `cifar10_shuffle_shared`
+### Area law vs. volume law, and what the full-length sweep revealed
 
-Real image datasets almost never show the "sparse, randomized" scaling pattern that the synthetic `sparse` GMRF was built to test (nearest-neighbor correlations scattered to random positions by a one-time permutation - see `get_sparse_volume_cov`). These two sources build a real-data analog directly from CIFAR-10 using `image.shuffle_pixels_independent` and `image.shuffle_pixels_shared`:
+Area/boundary law and volume law are defined by the *growth rate* of the rising portion of the curve: MI ~ L (linear, since a square patch's boundary/perimeter grows as ~4L in 2D) is a boundary/area law, while MI ~ L² (quadratic, tracking the patch's area) is a volume law. That's a claim about the early rise, before finite-size effects take over - and *every* curve here eventually turns over and declines back toward 0 as the inner patch approaches the full image (the outer patch runs out of pixels to correlate with), regardless of which law governs its growth. That decline is universal, not something that only happens to area-law curves - an easy trap to fall into when eyeballing where a curve peaks.
 
-- `cifar10_shuffle_independent` permutes each image's pixels with its own independent random permutation, which should destroy most of the *positional* correlation between the inner and outer patches (a given pixel position no longer maps to a consistent original location across images). It doesn't drive the MI all the way to zero, though: a permutation preserves each image's own pixel-value multiset, so a residual "do these two patches share the same overall brightness/contrast" signal survives.
-- `cifar10_shuffle_shared` applies the same permutation to every image, directly mirroring the synthetic `sparse` field's construction. Real pixel-to-pixel correlations are preserved, just scattered to non-local positions - which in practice produces *higher* MI than unshuffled CIFAR-10, since a fixed-size inner/outer square cut now severs a much larger fraction of the (now scattered) correlated pixel pairs than it would in the original, spatially-compact image.
+Fitting the actual exponent (log(MI) vs log(L), matching `language_experiment.py`'s existing power-law fit) over the early rise, at a consistent *relative* fraction of each dataset's own native size (this matters: L=10 is 36% of MNIST's 28px width but only 11% of LFW's 94px width, so comparing raw pixel-length windows across differently-sized datasets isn't a fair comparison) gives, robust across several fraction choices:
+
+| Dataset | Exponent | Verdict |
+| --- | --- | --- |
+| `mnist` | 0.67-0.76 | area-law |
+| `cifar10` | 0.70-0.95 | area-law |
+| `fer2013_hf` | 1.02-1.25 | area-law (close to exactly linear) |
+| `lfw_faces` | 2.43-2.62 | **volume-law** |
+
+So it's not "CIFAR-10/LFW/FER-2013 are volume-law, MNIST is the exception" - it's LFW specifically that's volume-law, and MNIST/CIFAR-10/FER-2013 all land on area-law. This is a correction of an earlier version of this note, which classified datasets by *where their curve peaked relative to the image size* (`image_noncrop_results/non_cropped_mi_scaling.png`, `mnist_vs_others_mi_scaling.png`) rather than by fitting the growth exponent directly - MNIST's unusually early peak (L=14/28, the image's midpoint) is real and reflects its digits being small, fixed-support strokes on an otherwise blank background (once the inner patch captures the whole digit, there's nothing left in the outer ring to correlate with), but a late peak doesn't by itself imply quadratic growth, since a longer correlation length just delays saturation without changing the underlying (linear) law. LFW's very low, noisy MI at small absolute L (its 94px native size makes "small" patches a much smaller fraction of the image than for the other datasets) also means its exponent fit is the least robust of the four and could partly reflect the estimator struggling more at that much higher input dimensionality (8,836 pixels vs. 28²-48² for the others) on the same fixed 10,000-image training budget, rather than a purely intrinsic property - not fully ruled out without a larger run.
+
+With this correction, our results are actually fairly consistent with the original paper (Sec. 6, read directly rather than just the abstract) rather than a departure from it: the paper found Tiny Images confidently boundary-law and called the MNIST evidence "less definitive" but leaning boundary-law too (a second, independent Gaussian-fit method found MNIST "obeys a clear boundary law"). Three of our four real datasets landing on area-law lines up with that, better than the peak-location-based classification this note previously reported.
+
+### A note on `mnist_shuffle_independent` / `mnist_shuffle_shared`
+
+Real image datasets almost never show the "sparse, randomized" scaling pattern that the synthetic `sparse` GMRF was built to test (nearest-neighbor correlations scattered to random positions by a one-time permutation - see `get_sparse_volume_cov`). `image.shuffle_pixels_independent`/`image.shuffle_pixels_shared` build a real-data analog by permuting real image pixels the same way:
+
+- `mnist_shuffle_independent` permutes each image's pixels with its own independent random permutation, which should destroy most of the *positional* correlation between the inner and outer patches (a given pixel position no longer maps to a consistent original location across images). It doesn't drive the MI all the way to zero, though: a permutation preserves each image's own pixel-value multiset, so a residual "do these two patches share the same overall brightness" signal survives.
+- `mnist_shuffle_shared` applies the same permutation to every image, directly mirroring the synthetic `sparse` field's construction. Real pixel-to-pixel correlations are preserved, just scattered to non-local positions - which in practice produces *higher* MI than unshuffled MNIST, since a fixed-size inner/outer square cut now severs a much larger fraction of the (now scattered) correlated pixel pairs than it would in the original, spatially-compact image.
+
+MNIST is the dataset used here (rather than CIFAR-10, tried during development) because the `sparse` GMRF's construction specifically starts from *nearest-neighbor* (very short-range) correlations before positions get scattered - and although the previous section's exponent fit shows both MNIST and CIFAR-10 are area-law, MNIST's correlations are also far shorter-*range* in absolute terms: its curve peaks and its real digit content is exhausted by L=14/28 (the image's midpoint), versus CIFAR-10's L=25/32 (78% of the image) - CIFAR-10 still has an approximately linear growth law, but sustained over a much longer distance. That makes MNIST the closer real-data match to `sparse`'s genuinely nearest-neighbor starting assumption, even though both datasets share the same (area-law) growth exponent.
+
+Swept across the full 1-28 range in `image_noncrop_results/mnist_shuffle_vs_sparse_scaling.png` (`image_results/mnist_shuffle_scaling.png`/`.pdf` is the same plot):
+
+- `mnist_shuffle_shared` peaks at L=21/28, well past unshuffled MNIST's own early (L=14) peak, and rises to a notably higher magnitude (≈6.6 nats vs unshuffled MNIST's ≈5.0 nats) - consistent with shuffling generally inflating estimated MI (see above).
+- `mnist_shuffle_independent` stays low throughout (peak ≈0.6 nats) with no clear structure - just the residual per-image brightness signal.
+
+For a check against the synthetic field this is meant to mimic: the *exact* analytic `sparse` GMRF curve (`image.get_analytic_MI` - free, no training needed, saved separately as `image_noncrop_results/sparse_gmrf_large_analytic_mi.npy`) peaks at L=21/28 too - the same location as `mnist_shuffle_shared`, even though it isn't plotted alongside it above. That peak-location match is suggestive, but the growth-exponent fit (same method as the previous section) is the real, rigorous check: unshuffled MNIST fits at 0.66-0.68 (area-law), while `mnist_shuffle_shared` fits at 1.76-2.56, converging toward ~2 as the fit window widens - matching the exact `sparse` GMRF's own exponent of 1.97-2.07 almost exactly. Scattering MNIST's short-range correlations really does convert its growth law from area-law to volume-law, exactly as the `sparse` field's own construction predicts.
 
 ## Requirements
 
@@ -64,24 +113,14 @@ Set the parameters in `alg.ini` (algorithm, `image_type`, number of images, etc.
 python -m src.mine
 ```
 
+## Project layout
+
+- `src/` - all source code (`image.py`, `mine.py` are the core MI-estimation pipeline; `sequence.py`/`language.py`/`language_experiment.py`/`language_embedding_experiment.py` are the 1D word-sequence analog; `image_noncrop_experiment.py` is the non-cropped real-dataset sweep).
+- `examples.ipynb` - the main walkthrough notebook; start here.
+- `image_results/`, `image_noncrop_results/`, `language_results/` - generated output (`.npy` arrays and plots) from the notebook and the standalone experiment scripts, one folder per experiment family.
+- `alg.ini`, `mine.ini` - config files for the `python -m src.mine` CLI entry point.
+- `CHANGELOG.md` - development history of this modernized fork; not needed to use the project, kept for context on *why* things are the way they are.
+
 ## What changed in this update
 
-- Replaced the Tiny Images dataset with CIFAR-10, Fashion-MNIST, and LFW (facial recognition) in `src/image.py`.
-- Removed the TensorFlow 1.x calls that no longer exist in TensorFlow 2.x (`tf.log` -> `tf.math.log`, removed `tf.reset_default_graph()`).
-- Updated model construction and optimizers for Keras 3 (explicit `Input` layer, `learning_rate=` keyword).
-- Made the TensorFlow import lazy so the Gaussian-field and plotting utilities work without TensorFlow installed.
-- Refreshed `requirements.in`/`requirements.txt` for modern Python.
-- Added a correctly spelled `LogisticRegression` alias (the original `LogsiticRegression` name still works).
-- Fixed `src/mine.py` for the current Keras 3 data-adapter API, which is stricter about generator inputs than the version this project was originally written against:
-  - `get_finite_dataset` now yields `(inputs, targets)` as tuples instead of lists — Keras's generator adapter now infers a `tf.TypeSpec` per input and rejects plain lists.
-  - `train_steps`/`val_steps` are now cast to `int` (`np.ceil` returns a `numpy.float64`, which the newer epoch iterator no longer accepts in `range()`).
-  - Added `mine.cycle_generator`, replacing `itertools.cycle(...)` for repeating the validation generator — Keras's adapter now requires an actual generator object and rejects `itertools.cycle` instances. `examples.ipynb` was updated to match.
-- `examples.ipynb`'s "Visualizing the scaling for a real dataset" section now sweeps **all** available real datasets (MNIST, Fashion-MNIST, CIFAR-10, LFW) instead of only MNIST, plotting them together with `image.plot_mi_scaling`.
-- That section now plots the *direct* MI estimate rather than the *indirect* (Donsker-Varadhan-style) one, matching how the original paper's own real-dataset figures (`plot_averages`) were generated. The indirect estimate's `log(mean(exp(...)))` term is much more sensitive to noisy batches and can dip below zero even though MI is analytically non-negative; the direct estimate (a plain mean of classifier logits) is far more stable. `image.plot_mi_scaling` also gained a `clip_negative` option (used here) to floor any residual noise-driven negative values at zero.
-- `mine.run_bipartition` gained an optional `eval_steps` argument (default 5000, unchanged) so the number of validation batches averaged over in `evaluate_MI` can be reduced to match a smaller `num_images`, instead of always evaluating over 5000 batches regardless of dataset size.
-- The notebook's real-dataset sweep now uses reduced settings (10,000 images, up to 30 epochs, patience 8, 400 eval steps) instead of the paper's full scale (70,000 images, up to 3,000 epochs, see `mine.ini`), so the 27-length sweep across multiple datasets finishes in minutes rather than hours. Raise these values for higher-fidelity curves closer to the published figures.
-- Added `lfw_faces` (via `sklearn.datasets.fetch_lfw_people`) as a working facial dataset in `src/image.py`, and included it in the notebook's real-dataset sweep. Added `scikit-learn` to `requirements.in`/`requirements.txt`. This replaced an earlier attempt using the much smaller Olivetti Faces dataset (400 images), whose MI estimates were noisy and squashed flat on the shared-axis comparison plot; LFW's 13,000+ images give comparable-magnitude, much less noisy estimates. The notebook still also plots it alone on its own axis (`lfw_faces_scaling.pdf`) to check.
-- Removed FER-2013 support entirely (`_load_fer2013`/`_load_fer2013_csv` in `src/image.py`, the `fer_csv_path`/`fer_data_dir` arguments to `get_images`, and the `tensorflow-datasets` dependency): FER-2013 has been removed from the `tensorflow-datasets` catalog and can no longer be loaded automatically, and LFW now covers the facial-dataset role instead.
-- `examples.ipynb`'s Gaussian Markov random field section gained two new live-computed cells after the static reference figures: (1) the *exact* analytic MI curves for all three field types at both correlation strengths, computed instantly from the closed-form Gaussian formula (`image.get_analytic_MI`) with no training; and (2) a validation plot overlaying the neural estimator's *direct* MI estimate (swept across all 27 partition lengths, same reduced settings as the real-dataset sweep) against that exact curve for the `diffuse`/`large` field, to demonstrate the estimator actually recovers the known value.
-- Fixed a notebook-format bug where several cells' `source` field had been written as a single raw string instead of a list of lines (both are valid per the nbformat spec, but the string form rendered as blank/invisible cell input in VS Code's notebook editor even though the cells still executed correctly).
-- Added `image.shuffle_pixels_independent` and `image.shuffle_pixels_shared`, plus two new `get_images` sources built on them (`cifar10_shuffle_independent`, `cifar10_shuffle_shared`), as a real-data analog of the synthetic `sparse` (randomized boundary-law) GMRF test. `examples.ipynb` gained a new section sweeping both across all 27 partition lengths and plotting them against unshuffled CIFAR-10 (`cifar10_shuffle_scaling.pdf`).
+See `CHANGELOG.md` for the full development history of this modernized fork.

@@ -1,10 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-import matplotlib.patches as mpatches
 
-# This module is used to process image data for the MI estimation task. Note that
-# much of the code here is non-functional without the associated data.
+# This module is used to process image data for the MI estimation task.
 #
 # TensorFlow / scikit-learn are imported lazily inside the loading functions
 # so that the Gaussian-field and plotting utilities in this module can be
@@ -279,14 +276,35 @@ def _load_lfw_faces():
     data = fetch_lfw_people(min_faces_per_person = 1, resize = 1.0)
     return data.images
 
+def _load_fer2013_hf():
+
+    # This helper loads FER-2013 (48 x 48 grayscale facial-emotion images,
+    # 7 classes) via the clip-benchmark/wds_fer2013 mirror on the Hugging
+    # Face Hub. The original Kaggle source is gone and FER-2013 was removed
+    # from the tensorflow-datasets catalog entirely (see the lfw_faces note
+    # above), so this restores actual emotion labels rather than LFW's
+    # identity labels. clip-benchmark/wds_fer2013 was chosen over several
+    # other community mirrors because it stores plain 48x48 grayscale JPEGs
+    # in the standard webdataset format - no custom loading script or
+    # trust_remote_code needed - and its train (28,709) + test (7,178)
+    # splits sum to exactly 35,887 images, matching the canonical FER-2013
+    # dataset size.
+
+    from datasets import load_dataset, concatenate_datasets
+    dataset = load_dataset("clip-benchmark/wds_fer2013")
+    combined = concatenate_datasets([dataset["train"], dataset["test"]])
+    images = np.stack([np.asarray(example["jpg"], dtype = np.float64) / 255 for example in combined])
+    return images
+
 def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMAGE_SIZE):
 
     # This function retrieves images from the specified dataset, as
     # well as the mean and covatiance from the Gaussian image sets.
     #
-    # Real image datasets ("mnist", "fashion_mnist", "cifar10", "lfw_faces")
-    # are returned as grayscale floats in [0, 1], conformed to target_size,
-    # with placeholder identity covariance / zero mean (they are not Gaussian).
+    # Real image datasets ("mnist", "fashion_mnist", "cifar10", "lfw_faces",
+    # "fer2013_hf") are returned as grayscale floats in [0, 1], conformed to
+    # target_size, with placeholder identity covariance / zero mean (they
+    # are not Gaussian).
 
     if source == 'mnist':
         images = _load_keras_dataset("mnist")[:num_images] / 255
@@ -313,23 +331,41 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
         images = conform_size(images, target_size, mode = "resize")
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
-    elif source == 'cifar10_shuffle_independent':
-        images = _load_keras_dataset("cifar10")[:num_images] / 255
-        images = convert_to_grayscale(images)
+    elif source == 'fer2013_hf':
+        images = _load_fer2013_hf()[:num_images]
+        # FER-2013 images are already grayscale floats in [0, 1] at their
+        # native 48 x 48 size, so target_size = 48 (the "non-cropped" case)
+        # is a no-op crop and returns them unchanged.
+        images = conform_size(images, target_size, mode = "crop")
+        cov = np.eye(images.shape[1] * images.shape[2])
+        mean = np.zeros(images.shape[1] * images.shape[2])
+    elif source == 'mnist_shuffle_independent':
+        images = _load_keras_dataset("mnist")[:num_images] / 255
         images = conform_size(images, target_size, mode = "crop")
         # A different random pixel permutation per image destroys any
-        # dataset-wide correlation between fixed pixel positions.
+        # dataset-wide correlation between fixed pixel positions. This
+        # shouldn't drive MI all the way to zero, though: a permutation
+        # preserves each image's own pixel-value multiset, so a residual
+        # "do these two patches share the same overall brightness" signal
+        # survives even once positional structure is scrambled away.
         images = shuffle_pixels_independent(images)
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
-    elif source == 'cifar10_shuffle_shared':
-        images = _load_keras_dataset("cifar10")[:num_images] / 255
-        images = convert_to_grayscale(images)
+    elif source == 'mnist_shuffle_shared':
+        images = _load_keras_dataset("mnist")[:num_images] / 255
         images = conform_size(images, target_size, mode = "crop")
         # The same random pixel permutation for every image preserves real
         # pixel-to-pixel correlations, just scattered to random positions
         # instead of local ones - a real-image analog of the "sparse"
-        # (randomized boundary-law) GMRF.
+        # (randomized boundary-law) GMRF, which is specifically built from
+        # *nearest-neighbor* (very short-range) correlations before positions
+        # get scattered. MNIST (rather than another real dataset) is used
+        # here because its own *unshuffled* scaling curve peaks at the
+        # image's midpoint and decays to ~0 well before the edge (see
+        # README.md's MNIST scaling note) - a much shorter correlation range
+        # than other real datasets show, even ones that share the same
+        # (area-law) growth exponent, making MNIST the closer real-data
+        # match to `sparse`'s genuinely short-range starting assumption.
         images = shuffle_pixels_shared(images)
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
@@ -360,150 +396,11 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
         raise ValueError("Image source not recognized.")
     return (images, cov, mean)
 
-def plot_cov():
-
-    # This function plots the covariance matricies from
-    # the strongly-correlated Gaussian Markov random fields
-    # with respect to the center pixel, which is marked in 
-    # red.
-
-    fontsize = 16
-    (_, ax_list) = plt.subplots(1, 3, figsize = (13, 4))
-    for (i, scaling_type) in enumerate(["area", "diffuse", "sparse"]):
-        (_, cov, _) = get_images(scaling_type, 1, strength = "large")
-        cov[405, 405] = 0
-        corr = cov[405].reshape([28, 28])
-        ax_list[i].imshow(corr)
-        for tick in ax_list[i].xaxis.get_major_ticks():
-            tick.label1.set_fontsize(fontsize)
-        for tick in ax_list[i].yaxis.get_major_ticks():
-            tick.label1.set_fontsize(fontsize)
-    ax_list[0].add_patch(mpatches.Rectangle((12.55, 13.495), 0.89, 0.969, color = "red"))
-    ax_list[1].add_patch(mpatches.Rectangle((12.55, 13.495), 0.89, 0.969, color = "red"))
-    ax_list[2].add_patch(mpatches.Rectangle((12.55, 13.495), 0.89, 0.969, color = "red"))
-    plt.tight_layout()
-    plt.text(-0.15, 1.02, "a)", fontsize = fontsize + 6, transform = ax_list[0].transAxes)
-    plt.text(-0.15, 1.02, "b)", fontsize = fontsize + 6, transform = ax_list[1].transAxes)
-    plt.text(-0.15, 1.02, "c)", fontsize = fontsize + 6, transform = ax_list[2].transAxes)
-    plt.subplots_adjust(left=None, bottom=None, right=None, top=0.933, wspace=0.23, hspace=0)
-    plt.savefig("scaling_covs.pdf")
-
-def plot_gaussian_cov_image(source = "gauss_mnist"):
-
-    # This function samples an image from a Gaussian distribution fit to a
-    # real dataset and plots both the covariance with respect to the center
-    # pixel (marked in red) and a sample image.
-
-    (_, ax_list) = plt.subplots(1, 2, figsize = (6, 3))
-    (images, cov, _) = get_images(source, 1)
-    length = int(cov.shape[0] ** 0.5)
-    center = (length // 2) * length + (length // 2)
-    cov = cov.copy()
-    cov[center, center] = 0
-    corr = cov[center].reshape([length, length])
-    ax_list[0].imshow(corr)
-    ax_list[1].imshow(images[0], cmap = "gray")
-    ax_list[0].set_title("Covariance")
-    ax_list[1].set_title("Sample")
-    plt.tight_layout()
-    plt.subplots_adjust(left = None, bottom = None, right = None, top = None, wspace = 0, hspace = None)
-    plt.savefig("image_cov.pdf")
-
-def plot_sampled_images():
-
-    # This function samples an image from each of the six
-    # Gaussian Markov random fields and then plots it.
-
-    (_, ax_list) = plt.subplots(2, 3)
-    for (i, size) in enumerate(["small", "large"]):
-        for (j, scaling_type) in enumerate(["area", "diffuse", "sparse"]):
-            (image, _, _) = get_images(scaling_type, 1, size)
-            ax_list[i][j].imshow(image[0], cmap = "gray")
-    ax_list[0][0].set_title("Nearest-Neighbor")
-    ax_list[0][1].set_title("Uniform")
-    ax_list[0][2].set_title("Randomized")
-    ax_list[0][0].set_ylabel("Weak", fontsize = 12)
-    ax_list[1][0].set_ylabel("Strong", fontsize = 12)
-    plt.tight_layout()
-    plt.subplots_adjust(left = None, bottom = None, right = None, top = None, wspace = None, hspace = 0)
-    plt.savefig("gauss_samples.pdf")
-        
-def plot_gaussian(sources = ("gauss_mnist",), labels = None):
-
-    # This function computes analytic MI values for Gaussian distributions
-    # fit to one or more real datasets.
-
-    fontsize = 14
-    plt.rc("axes", linewidth = 1)
-    (_, axes) = plt.subplots(1, 1, figsize = (10, 6))
-
-    for tick in axes.xaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize)
-    for tick in axes.yaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize)
-
-    size = 27
-    lengths = list(range(1, size))
-    for source in sources:
-        (_, cov, _) = get_images(source, 1)
-        image_length = int(cov.size**(1/4))
-        mi = get_analytic_MI(cov, [image_length, image_length], size + 1)
-        axes.plot(lengths, mi[:-1])
-    axes.set_xlabel('Partition Length (pixels)', fontsize = fontsize + 2)
-    axes.set_ylabel('Mutual Information (nats)', fontsize = fontsize + 2)
-    if labels is None:
-        labels = ["Gaussian fit to {}".format(source) for source in sources]
-    plt.legend(labels, fontsize = fontsize + 2)
-    plt.tight_layout()
-    plt.savefig("gaussian.pdf")
-
-def plot_averages(result_specs = None):
-
-    # This function plots averaged MI estimates for one or more real datasets.
-    # Each entry in result_specs is a dict with keys:
-    #   "path"       : path to the saved .npy array of trial results
-    #   "label"      : legend label
-    #   "num_trials" : number of trials stored in the array
-    #   "length"     : number of partition lengths per trial (default 27)
-    # The saved arrays are assumed to flatten to [num_trials * length * 2].
-
-    if result_specs is None:
-        result_specs = [{
-            "path": "averages/logistic_dense_mnist_0_1.0_70000.npy",
-            "label": "70,000 MNIST Images",
-            "num_trials": 20,
-            "length": 27}]
-
-    fontsize = 14
-    plt.rc("axes", linewidth = 1)
-    (_, axes) = plt.subplots(1, 1, figsize = (10, 6))
-
-    for tick in axes.xaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize)
-    for tick in axes.yaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize)
-
-    labels = []
-    for spec in result_specs:
-        length = spec.get("length", 27)
-        trials = np.load(spec["path"]).reshape([spec["num_trials"], length, 2])
-        mean = np.mean(trials, axis = 0)
-        std = np.std(trials, axis = 0)
-        lengths = np.arange(1, length)
-        axes.plot(lengths, mean[:length - 1, 1])
-        axes.fill_between(lengths, (mean + std)[:length - 1, 1], (mean - std)[:length - 1, 1], alpha = 0.3)
-        labels.append(spec["label"])
-    axes.legend(labels, fontsize = fontsize + 2)
-    axes.set_xlabel("Partition Length (pixels)", fontsize = fontsize + 2)
-    axes.set_ylabel("Mutual Information (nats)", fontsize = fontsize + 2)
-    plt.tight_layout()
-    plt.savefig("dataset_averages.pdf")
-
 def plot_mi_scaling(results, lengths = None, labels = None, save_path = None, clip_negative = False):
 
     # This function plots one or more MI-vs-partition-length curves using
-    # the same figure style as the paper's scaling plots (plot_gaussian,
-    # plot_averages), but operates directly on MI values already held in
+    # the same figure style as the paper's scaling plots, but operates
+    # directly on MI values already held in
     # memory rather than loading pre-saved trial .npy files. This makes it
     # suitable for visualizing results computed live in a notebook, e.g. by
     # looping mine.run_bipartition over a range of partition lengths.
@@ -549,95 +446,3 @@ def plot_mi_scaling(results, lengths = None, labels = None, save_path = None, cl
     if save_path is not None:
         plt.savefig(save_path)
     return axes
-
-def plot_large_small_avg(scaling_type):
-
-    # This function creates plots of the MI for the 
-    # Gaussian Markov random fields, using the analytic
-    # value and the three estimates with different sample
-    # sizes.
-
-    if scaling_type not in ["area", "diffuse", "sparse"]:
-        raise ValueError("Scaling type '{}' not recognized.".format(scaling_type))
-    size = 27
-
-    # Compute the average MI values and the standard deviation
-    # for the small correlaton value.
-
-    small_corr = rho_values[scaling_type]["small"]
-    small_0 = np.load('trials/logistic_dense_{}_{}_1.0_70000.npy'.format(scaling_type, small_corr)).reshape([-1,27,2])[:20]
-    small_1 = np.load('trials/logistic_dense_{}_{}_1.0_700000.npy'.format(scaling_type, small_corr)).reshape([-1,27,2])[:10]
-    small_2 =  np.load('trials/logistic_dense_{}_{}_1.0_7000000.npy'.format(scaling_type, small_corr)).reshape([-1,27,2])[:5]
-    small_mean_0 = np.mean(small_0, axis = 0)
-    small_mean_1 = np.mean(small_1, axis = 0)
-    small_mean_2 = np.mean(small_2, axis = 0)
-    small_std_0 = np.std(small_0, axis = 0)
-    small_std_1 = np.std(small_1, axis = 0)
-    small_std_2 = np.std(small_2, axis = 0)
-    (_, small_cov, _) = get_images(scaling_type, 1, strength = "small")
-    small_length = int(small_cov.size**(1/4))
-    small_exact = get_analytic_MI(small_cov, [small_length, small_length], size + 1)
-    
-    # Compute the average MI values and the standard deviation
-    # for the large correlaton value.
-
-    large_corr = rho_values[scaling_type]["large"]
-    large_0 = np.load('trials/logistic_dense_{}_{}_1.0_70000.npy'.format(scaling_type, large_corr)).reshape([-1,27,2])[:20]
-    large_1 = np.load('trials/logistic_dense_{}_{}_1.0_700000.npy'.format(scaling_type, large_corr)).reshape([-1,27,2])[:10]
-    large_2 =  np.load('trials/logistic_dense_{}_{}_1.0_7000000.npy'.format(scaling_type, large_corr)).reshape([-1,27,2])[:5]
-    large_mean_0 = np.mean(large_0, axis = 0)
-    large_mean_1 = np.mean(large_1, axis = 0)
-    large_mean_2 = np.mean(large_2, axis = 0)
-    large_std_0 = np.std(large_0, axis = 0)
-    large_std_1 = np.std(large_1, axis = 0)
-    large_std_2 = np.std(large_2, axis = 0)
-    (_, large_cov, _) = get_images(scaling_type, 1, strength = "large")
-    large_length = int(large_cov.size**(1/4))
-    large_exact = get_analytic_MI(large_cov, [large_length, large_length], size + 1)
-
-    # Plot the mean values and standard deviation on a pair
-    # of axes, and then save the result.
-
-    lengths = list(range(1, size))
-    fontsize = 14
-    linewidth = 2
-    plt.rc("axes", linewidth = 1)
-    (_, axes) = plt.subplots(1, 2, figsize = (12, 6))
-
-    for tick in axes[0].xaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize + 1)
-    for tick in axes[0].yaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize + 1)
-
-    for tick in axes[1].xaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize + 1)
-    for tick in axes[1].yaxis.get_major_ticks():
-        tick.label1.set_fontsize(fontsize + 1)
-
-    handles = [mlines.Line2D([], [], color = "C0"), mlines.Line2D([], [], color = "C1"), 
-        mlines.Line2D([], [], color = "C2"), mlines.Line2D([], [], color = "C3")]
-    axes[0].legend(handles, [r'$7\times10^4$ samples', r'$7\times10^5$ samples', r"$7\times10^6$ samples", 'Exact'],
-    fontsize = fontsize + 2).set_zorder(-1)
-
-    axes[0].plot(lengths, small_mean_0[:26, 0], "C0", linewidth = linewidth)
-    axes[0].fill_between(lengths, (small_mean_0 + small_std_0)[:26, 0], (small_mean_0 - small_std_0)[:26, 0], alpha = 0.3)
-    axes[0].plot(lengths, small_mean_1[:26, 0], "C1", linewidth = linewidth)
-    axes[0].fill_between(lengths, (small_mean_1 + small_std_1)[:26, 0], (small_mean_1 - small_std_1)[:26, 0], alpha = 0.3)
-    axes[0].plot(lengths, small_mean_2[:26, 0], "C2", linewidth = linewidth)
-    axes[0].fill_between(lengths, (small_mean_2 + small_std_2)[:26, 0], (small_mean_2 - small_std_2)[:26, 0], alpha = 0.3)
-    axes[0].plot(lengths, small_exact[:26], "C3", linewidth = linewidth)
-    axes[0].set_xlabel('Partition Length (L)', fontsize = fontsize + 3)
-    axes[0].set_ylabel('Mutual Information (nats)', fontsize = fontsize + 3)
-
-    axes[1].plot(lengths, large_mean_0[:26, 0], "C0", linewidth = linewidth)
-    axes[1].fill_between(lengths, (large_mean_0 + large_std_0)[:26, 0], (large_mean_0 - large_std_0)[:26, 0], alpha = 0.3)
-    axes[1].plot(lengths, large_mean_1[:26, 0], "C1", linewidth = linewidth)
-    axes[1].fill_between(lengths, (large_mean_1 + large_std_1)[:26, 0], (large_mean_1 - large_std_1)[:26, 0], alpha = 0.3)
-    axes[1].plot(lengths, large_mean_2[:26, 0], "C2", linewidth = linewidth)
-    axes[1].fill_between(lengths, (large_mean_2 + large_std_2)[:26, 0], (large_mean_2 - large_std_2)[:26, 0], alpha = 0.3)
-    axes[1].plot(lengths, large_exact[:26], "C3", linewidth = linewidth)
-    axes[1].set_xlabel('Partition Length (L)', fontsize = fontsize + 3)
-
-    plt.tight_layout()
-    plt.subplots_adjust(left = None, bottom = None, right = None, top = None, wspace = 0.2, hspace = None)
-    plt.savefig(f"{scaling_type}.pdf")
