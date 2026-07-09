@@ -8,16 +8,38 @@ import numpy as np
 
 from src import image as img
 
-# This module runs the MI estimation experiments.
+# This module implements the actual MI estimation algorithm: a neural
+# network is trained as a binary classifier to distinguish real (a, b) pairs
+# drawn from the joint distribution p(a, b) - here, a whole image, with `a`
+# the inner patch and `b` the surrounding outer patch - from "fake" pairs
+# built by splicing an inner patch from one image onto the outer patch of an
+# unrelated image, which approximates a draw from the product-of-marginals
+# distribution p(a)p(b). If the classifier is trained well, its output on a
+# real sample approximates the log-density-ratio log[p(a,b) / p(a)p(b)],
+# whose expectation over p(a,b) *is* the mutual information (a standard
+# result sometimes called the "density-ratio trick" or, in this classifier
+# formulation, related to the Donsker-Varadhan/NWJ family of MI lower
+# bounds). See evaluate_MI below for exactly how the two MI estimates
+# (`direct`/`indirect`) are built from the classifier's output on held-out
+# data, and get_finite_dataset for how the "real" vs "spliced" batches are
+# actually constructed.
 
 class Model():
 
-    # This class holds the fully-connected neural network
-    # that is used for MI estimation.
+    # This class holds the fully-connected neural network that is used for
+    # MI estimation. It has two identically-weighted "towers" (see
+    # build_model) that are fed different inputs each training step: one
+    # gets real, untouched images (samples from the joint p(a,b)); the other
+    # gets the spliced "fake" images described above (samples from the
+    # product of marginals p(a)p(b)). Model itself is agnostic to what loss
+    # function turns those two outputs into a training signal - that's
+    # supplied by a subclass (LogisticRegression or MINE, below), which
+    # determines what quantity the network's scalar output actually
+    # approximates once trained.
 
     def __init__(self, image_shape, settings):
 
-        # The model can be configured based on the numuber of 
+        # The model can be configured based on the numuber of
         # layers, learning rate, optimizers, and dropout.
 
         self.drop = float(settings['drop'])
@@ -29,10 +51,16 @@ class Model():
 
     def build_model(self, image_shape):
 
-        # The model is constructed such that it contains two inputs
-        # one corresponding to the normal images and another to
-        # the mixed images. These inputs generate distinct outputs,
-        # but are processed by the same model layers.
+        # The model is constructed such that it contains two inputs, one
+        # corresponding to the real ("joint") images and another to the
+        # spliced ("marginal") images. Both inputs are run through the same
+        # `model_core` sub-network (weight sharing - it's the same Sequential
+        # instance called twice, not two separate copies), so the model
+        # learns a single scoring function T(x) and just evaluates it on two
+        # different batches per step; the two resulting scalar outputs are
+        # what the loss functions below (e.g. logistic_loss_joint/_marginal)
+        # compare against a target label to know whether a given image
+        # looked more "real" (joint) or "fake" (marginal).
 
         joint_input = ks.Input(shape = image_shape)
         marginal_input = ks.Input(shape = image_shape)
@@ -46,7 +74,7 @@ class Model():
         joint_output = model_core(joint_input)
         marginal_output = model_core(marginal_input)
         self.model = ks.Model(inputs = [joint_input, marginal_input], outputs = [joint_output, marginal_output])
-        
+
     def compile_model(self, loss_functions):
 
         # The model is compiled based on the specified opimizer
@@ -67,7 +95,9 @@ class Model():
     def train(self, train_itr, val_itr, train_steps, val_steps, epochs):
 
         # The model is trained using early stoppage according to the
-        # patience setting.
+        # patience setting: training halts once `val_loss` fails to improve
+        # for `self.patience` consecutive epochs, and the best-seen weights
+        # (not necessarily the final epoch's) are restored before returning.
 
         self.model.fit(
             train_itr,
@@ -79,11 +109,30 @@ class Model():
                 monitor = 'val_loss', min_delta = 0, patience = self.patience, restore_best_weights = True)],
             verbose = 1
         )
-    
+
     def evaluate_MI(self, image_iterator, num_steps):
 
-        # This function uses the trained model to estimate the
-        # MI of a given image set.
+        # This function uses the trained model to estimate the MI of a
+        # given image set, by averaging its classifier output over
+        # `num_steps` held-out batches and combining the joint/marginal
+        # averages into two different MI estimates:
+        #
+        #   direct_mi   = E_joint[T(x)]
+        #   indirect_mi = E_joint[T(x)] - log(E_marginal[exp(T(x))])
+        #
+        # `direct_mi` is just the mean classifier score on real (joint)
+        # samples. At the Bayes-optimal classifier, T(x) equals the true
+        # log-density-ratio, so this mean is exactly the MI by definition -
+        # but it carries no correction if the classifier hasn't fully
+        # converged, so it can be biased in either direction.
+        # `indirect_mi` additionally subtracts log(mean(exp(T))) over
+        # marginal samples, a Donsker-Varadhan-style correction term that is
+        # mathematically forced to be ~0 if T truly is the log-density-ratio
+        # (since E_marginal[exp(log-density-ratio)] = 1). Subtracting it
+        # gives a bound that's more robust to imperfect training, at the
+        # cost of being sensitive to the `exp()` term blowing up on rare
+        # high-scoring marginal batches - which of the two estimates is more
+        # trustworthy is dataset-dependent (see README.md's note on this).
 
         cum_joint = 0
         cum_marginal = 0
@@ -101,7 +150,14 @@ class Model():
 
 class LogsiticRegression(Model):
 
-    # This model uses the cross-entropy as its loss function.
+    # This model uses the cross-entropy (logistic regression) loss: it
+    # trains model_core as an ordinary binary classifier (real vs. spliced),
+    # via logistic_loss_joint/_marginal below. At the Bayes-optimal solution
+    # this recovers the true log-density-ratio directly (see the module
+    # docstring at the top of this file), which is the "direct" MI estimate
+    # in evaluate_MI. This is the algorithm used throughout this project's
+    # notebook and experiment scripts (`algorithm = "logistic"` in
+    # alg.ini-style settings dicts).
 
     def __init__(self, image_shape, settings):
         Model.__init__(self, image_shape, settings)
@@ -115,7 +171,14 @@ LogisticRegression = LogsiticRegression
 
 class MINE(Model):
 
-    # This model uses the MINE loss function.
+    # This model instead directly optimizes the Donsker-Varadhan lower bound
+    # on MI as its training objective (via biased_MINE_loss_joint/_marginal
+    # below, negated since Keras minimizes), rather than a classification
+    # loss - the approach introduced by Belghazi et al., "MINE: Mutual
+    # Information Neural Estimation" (2018), which this class and module are
+    # named after. Selected via `algorithm = "mine"` in alg.ini-style
+    # settings dicts; not exercised by this project's own notebook (which
+    # uses "logistic" throughout) but fully functional as an alternative.
 
     def __init__(self, image_shape, settings):
         Model.__init__(self, image_shape, settings)
@@ -124,7 +187,12 @@ class MINE(Model):
 
 class Index():
 
-    # This class is used to conveniently construct randomized indices.
+    # A small stateful helper for drawing successive, non-overlapping random
+    # batches from a fixed pool of `num_indicies` indices: the constructor
+    # shuffles all the indices once, and each call to draw(size) hands out
+    # (and permanently removes) the next `size` of them. Used so that a
+    # single epoch's worth of batches partitions the dataset exactly once,
+    # rather than sampling with replacement.
 
     def __init__(self, num_indicies):
         self.indices = np.random.permutation(np.arange(num_indicies))
@@ -136,9 +204,15 @@ class Index():
 
 def get_mixed_indices(num_indices):
 
-    # This function generates randomized pairings drawn with
-    # replacement from a set of indices, and avoids duplicate
-    # pairings.
+    # Generates two independent random permutations of the same index range
+    # (index_1, index_2), for use as an (inner-patch source, outer-patch
+    # source) pairing when building "marginal" (spliced) samples in
+    # get_finite_dataset. Positions where both permutations happen to point
+    # at the *same* original index are then repeatedly re-shuffled (the
+    # while loop below) until no such collisions remain - without this, some
+    # "marginal" samples would end up as an inner patch and outer patch both
+    # taken from the *same* real image, which is actually a joint sample in
+    # disguise and would bias the MI estimate downward.
 
     index_1 = Index(num_indices)
     index_2 = Index(num_indices)
@@ -158,8 +232,11 @@ def get_mixed_indices(num_indices):
 
 def logistic_loss_joint(unused_y_true, joint_output):
 
-    # This function is the cross-entropy loss function with
-    # labels of value 1.
+    # Cross-entropy loss for the "joint" (real, unmodified) batch, labeled 1
+    # (i.e. "this batch is real"). `unused_y_true` exists only because
+    # Keras's loss-function signature always passes the target array from
+    # `get_finite_dataset`'s dummy zero labels; the actual label used here is
+    # the constant `labels = tf.ones_like(...)` below, not that argument.
 
     labels = tf.ones_like(joint_output)
     logits = joint_output
@@ -169,8 +246,8 @@ def logistic_loss_joint(unused_y_true, joint_output):
 
 def logistic_loss_marginal(unused_y_true, marginal_output):
 
-    # This function is the cross-entropy loss function with
-    # labels of value 0.
+    # Cross-entropy loss for the "marginal" (spliced/fake) batch, labeled 0
+    # ("this batch is fake") - the mirror image of logistic_loss_joint above.
 
     labels = tf.zeros_like(marginal_output)
     logits = marginal_output
@@ -180,14 +257,21 @@ def logistic_loss_marginal(unused_y_true, marginal_output):
 
 def biased_MINE_loss_joint(unused_y_true, joint_output):
 
-    # This function computes the joint portion of the MINE loss.
+    # The joint (E_joint[T(x)]) term of the negated Donsker-Varadhan bound:
+    # since Keras minimizes, and we want to *maximize* E_joint[T] -
+    # log(E_marginal[exp(T)]), this term is just its negation, added to
+    # biased_MINE_loss_marginal below via Keras's per-output loss summing.
 
     loss = -tf.reduce_mean(joint_output)
     return loss
 
 def biased_MINE_loss_marginal(unused_y_true, marginal_output):
 
-     # This function computes the marginal portion of the MINE loss.
+    # The -log(E_marginal[exp(T(x))]) term of the negated Donsker-Varadhan
+    # bound (see biased_MINE_loss_joint above) - "biased" because this uses
+    # a plain minibatch average to estimate E_marginal[exp(T)] rather than a
+    # bias-corrected moving average, which is a known source of gradient
+    # bias in the DV-bound training objective (see Belghazi et al. 2018).
 
     avg_marginal_exp = tf.reduce_mean(tf.exp(marginal_output))
     loss = tf.math.log(avg_marginal_exp)
@@ -195,10 +279,26 @@ def biased_MINE_loss_marginal(unused_y_true, marginal_output):
 
 def get_finite_dataset(images, inner_region, batch_size, loop = True):
 
-    # This function returns a generator that takes a set of images and
-    # generates joint sample (image left alone) and marginal samples
-    # (center part of image swapped with another image) to use for
-    # MI estimation. 
+    # This function returns a generator that yields (joint, marginal) image
+    # batches for MI estimation, one full epoch's worth of batches per outer
+    # loop iteration (`for _ in itr`) if `loop = True`, or exactly one epoch
+    # if `loop = False`:
+    #
+    #   - "joint" batch: real images, completely untouched - samples from
+    #     the true joint distribution p(inner_patch, outer_patch).
+    #   - "marginal" batch: real *outer* patches, but with their *inner*
+    #     patch (the `[top:bottom, left:right]` region defined by
+    #     `inner_region`, see image.get_center_region) replaced by the inner
+    #     patch cut from a *different, unrelated* image (chosen by
+    #     get_mixed_indices, which also guarantees the "different" image is
+    #     never accidentally the same one). Splicing together two unrelated
+    #     images' patches like this approximates a draw from the product of
+    #     marginals p(inner_patch)·p(outer_patch), since the two patches no
+    #     longer have anything to do with each other.
+    #
+    # The (dummy) label arrays yielded alongside each image pair are all
+    # zeros and are never actually used - see logistic_loss_joint's comment
+    # on why the loss functions ignore their `y_true` argument.
 
     num_batches = math.ceil(images.shape[0] / batch_size)
     (top, bottom, left, right) = inner_region
@@ -221,25 +321,41 @@ def get_finite_dataset(images, inner_region, batch_size, loop = True):
 
 def cycle_generator(generator_fn, *args, **kwargs):
 
-    # Repeatedly re-invokes a finite generator factory, yielding a true
-    # generator object (Keras's data adapters reject itertools.cycle,
-    # which is not a generator instance).
+    # Repeatedly re-invokes a finite generator factory (i.e. calls
+    # generator_fn(*args, **kwargs, loop=False) again each time it runs dry
+    # and yields from the fresh one), so the validation set can be cycled
+    # through indefinitely across many epochs. This exists in place of the
+    # more obvious `itertools.cycle(get_finite_dataset(...))` because Keras's
+    # data adapters require an actual generator *instance* (something with a
+    # `__next__` bound to a running generator frame) and reject
+    # `itertools.cycle` objects, which are iterators but not generators in
+    # that stricter sense.
 
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
 def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE):
 
-    # This function runs the MI estimation experiment using the
-    # provided settings and partition size. eval_steps controls how many
-    # validation batches evaluate_MI averages over; the default of 5000
-    # matches the paper's full-scale runs, but a smaller value is more
-    # appropriate when num_images has been reduced for a quicker demo.
-    # target_size is passed straight through to img.get_images and defaults
-    # to the same 28x28 every existing caller already relies on, so this is
-    # purely additive - existing alg.ini/mine.ini-driven runs and notebook
-    # cells are unaffected. Pass a larger value to train on less-aggressively
-    # downsized images (e.g. a dataset's native resolution).
+    # This is the top-level, one-call entry point for a single MI
+    # measurement: given a dataset (`alg_settings["image_type"]`) and a
+    # partition length (`inner_length`, the side length of the centered
+    # square inner patch - see image.get_center_region), it loads the
+    # images, builds and trains a fresh classifier from scratch to
+    # distinguish that dataset's joint vs. marginal samples (get_finite_dataset),
+    # and returns its (indirect, direct) MI estimate (Model.evaluate_MI).
+    # Every scaling-curve sweep in this project - the notebook, alg.ini's own
+    # CLI loop below, image_noncrop_experiment.py, etc. - is just this
+    # function called once per partition length.
+    #
+    # eval_steps controls how many validation batches evaluate_MI averages
+    # over; the default of 5000 matches the paper's full-scale runs, but a
+    # smaller value is more appropriate when num_images has been reduced for
+    # a quicker demo. target_size is passed straight through to
+    # img.get_images and defaults to the same 28x28 every existing caller
+    # already relies on, so this is purely additive - existing
+    # alg.ini/mine.ini-driven runs and notebook cells are unaffected. Pass a
+    # larger value to train on less-aggressively downsized images (e.g. a
+    # dataset's native resolution) - see src/image_noncrop_experiment.py.
 
     num_images = max(1, int(alg_settings["num_images"]))
     (images, _, _) = img.get_images(
@@ -251,6 +367,11 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
     images = np.expand_dims(images, axis = 3)
     inner_region = img.get_center_region(inner_length, height, width)
 
+    # `algorithm` is read from alg_settings here (rather than relied on as a
+    # module/enclosing-scope global) so that this function is fully
+    # self-contained and callable on its own - every caller in this project
+    # other than the __main__ block below invokes it directly, without ever
+    # running the config-file-driven code at the bottom of this file.
     algorithm = alg_settings["algorithm"]
     if algorithm == 'mine':
         net = MINE(images.shape[1:], param_settings)
@@ -263,7 +384,7 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
     train_images = images[val_start:]
     val_images = images[:val_start]
     batch_size = int(param_settings['batch'])
-    
+
     train_steps = int(np.ceil(train_images.shape[0] / batch_size))
     val_steps = int(np.ceil(val_images.shape[0] / batch_size))
 
@@ -276,9 +397,14 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
 
 if __name__ == "__main__":
 
-    # The following code loads settings from the alg.ini and
-    # mine.ini configuration files, and then runs the specified
-    # experiments.
+    # Command-line entry point (`python -m src.mine`): loads settings from
+    # the alg.ini and mine.ini configuration files, then either sweeps
+    # run_bipartition across every partition length from `abs(start_length)`
+    # up to 27 (if `start_length` is negative in alg.ini) or runs just the
+    # one length `start_length` (if non-negative). This is the original,
+    # config-file-driven way to run an experiment; the notebook and the
+    # standalone *_experiment.py scripts elsewhere in src/ call
+    # run_bipartition directly instead and don't use this code path at all.
 
     alg_parser = configparser.ConfigParser()
     alg_parser.read("alg.ini")
@@ -311,3 +437,4 @@ if __name__ == "__main__":
     else:
         mi = run_bipartition(start_length, alg_settings, param_settings)
         print(mi)
+  

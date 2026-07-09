@@ -20,8 +20,15 @@ DEFAULT_IMAGE_SIZE = 28
 
 def get_pixel_numbers(image_height, image_width, region):
 
-    # This function returns a grid that has been numbered
-    # row-by-row from left to right.
+    # Numbers every pixel in an image_height x image_width grid row-by-row
+    # (0, 1, 2, ... left to right, top to bottom - matching how a
+    # (height, width) array flattens under np.reshape/.flatten()), then
+    # returns just the numbers that fall inside `region` (a (top, bottom,
+    # left, right) box, e.g. from get_center_region). This is what converts
+    # a 2D pixel *region* into the flat integer *indices* that
+    # get_marginal_entropy/get_gaussian_mutual_information need, since the
+    # covariance matrices in this module are indexed by flattened pixel
+    # position, not by (row, col).
 
     indices = np.reshape(np.arange(image_height*image_width), [image_height, image_width])
     (top, bottom, left, right) = region
@@ -30,20 +37,45 @@ def get_pixel_numbers(image_height, image_width, region):
 
 def get_center_region(length, img_height, img_width):
 
-    # This function extracts the four corners of a patch
-    # located in the middle of the img_height x img_wdith
-    # # image. 
+    # Returns the (top, bottom, left, right) bounding box of a centered
+    # length x length square patch within an img_height x img_width image
+    # (the "inner" patch throughout this project; everything outside it is
+    # the "outer" patch). When length is odd relative to the image
+    # dimensions, `top`/`left` round down (floor division), so the patch is
+    # not perfectly symmetric by a fraction of a pixel - a minor, consistent
+    # convention rather than a bug.
 
     top = img_height // 2 - length // 2
     left = img_width // 2 - length // 2
     region = (top, top + length, left, left + length)
     return region
 
+# --- Gaussian Markov random field (GMRF) constructors ---------------------
+#
+# Each of the next three functions builds the *precision matrix* Q (inverse
+# covariance) of a zero-mean multivariate Gaussian over length**2 "pixels"
+# arranged on a length x length grid, then returns its inverse (the
+# covariance matrix `cov` that get_gaussian_images/get_analytic_MI actually
+# need). Off-diagonal entries of Q set the *conditional* correlation between
+# two pixels given every other pixel - a classic Gaussian Markov random
+# field construction - which is a more direct way to encode "this pair of
+# pixels is/isn't locally coupled" than specifying the covariance matrix
+# itself. All three differ only in *which* pairs of pixels get a non-zero Q
+# entry (their common value is the `rho` argument), which is what gives
+# them exactly-known, structurally different scaling behavior when their
+# exact MI is computed (get_analytic_MI) - see README.md's "Area law vs.
+# volume law" section for how that scaling behavior was actually measured on
+# these fields and on real datasets.
+
 def get_area_law_cov(length, rho):
 
-    # This function constructs a covariance matrix
-    # with every variable being correlated with its
-    # four nearest neighbors.
+    # Nearest-neighbor nonzero off-diagonal Q entries only (each pixel
+    # conditionally correlated with just its up/down/left/right neighbors on
+    # the grid). This is the "area"/boundary-law prototype: since only pairs
+    # of pixels adjacent across the inner/outer cut can be correlated at
+    # all, the MI a partition picks up scales with the *length of that cut*
+    # (~4 x length in 2D, i.e. linearly in the partition side length), not
+    # with the enclosed area.
 
     q = np.eye(length**2)
     for i in range(length):
@@ -58,9 +90,13 @@ def get_area_law_cov(length, rho):
 
 def get_diffuse_volume_cov(length, rho):
 
-    # This function constructs a covariance matrix
-    # with every variable equally correlated to all
-    # other variables.
+    # Every pixel pair gets the same nonzero Q entry `rho`, regardless of
+    # distance on the grid - the opposite extreme from get_area_law_cov's
+    # nearest-neighbor-only structure. This is the "volume law" prototype:
+    # because correlation doesn't decay with distance, the amount of MI a
+    # partition picks up scales with how many pixel *pairs* get split across
+    # the inner/outer cut, which (for a small inner patch in a much larger
+    # image) grows with the inner patch's *area*, not just its boundary.
 
     q = np.full([length**2, length**2], rho)
     for i in range(length**2):
@@ -70,9 +106,23 @@ def get_diffuse_volume_cov(length, rho):
 
 def get_sparse_volume_cov(length, rho):
 
-    # This function constructs a covariance matrix
-    # with sparse correlations that obey a volume law
-    # in their scaling.
+    # Starts from exactly the same nearest-neighbor Q as get_area_law_cov,
+    # but then randomly permutes which grid position each of the length**2
+    # variables actually sits at (`shuffle`, applied to both rows and
+    # columns of Q so the permutation is consistent). Every variable is
+    # still only conditionally correlated with 4 others - the correlation
+    # graph itself is unchanged - but those 4 partners are now scattered to
+    # essentially random locations on the grid instead of being physically
+    # adjacent. A fixed-size square inner/outer cut through this randomized
+    # layout severs a number of correlated pairs that scales with the inner
+    # patch's *volume* (same mechanism as get_diffuse_volume_cov, despite
+    # the underlying graph being sparse/local rather than dense/global) - a
+    # real synthetic test case for "what does it look like when genuinely
+    # local correlations are physically scattered", which
+    # `mnist_shuffle_shared` below (see get_images) reproduces with real
+    # image data. The permutation uses a *fixed* seed (123456789) so this
+    # field's structure - and therefore its exact MI curve - is
+    # reproducible across calls, not re-randomized every time.
 
     gen = np.random.RandomState(123456789)
     q = np.eye(length**2)
@@ -91,10 +141,23 @@ def get_sparse_volume_cov(length, rho):
 
 def get_marginal_entropy(cov, remove = [], keep = []):
 
-    # This function computes the marginal entropy of a 
-    # Gaussian Markov random field with respect to a specific
-    # set of variables, selected by either keeping or removing
-    # some of the variables.
+    # Computes the differential (Shannon) entropy of the marginal Gaussian
+    # distribution over a subset of variables from a full covariance matrix
+    # `cov` - either the variables in `keep`, or all variables *except*
+    # those in `remove` (exactly one of the two should be given; if neither
+    # is, the full `cov` is used as-is). For a multivariate Gaussian with
+    # covariance C, the differential entropy has the closed form
+    # S = (1/2) * log((2*pi*e)^n * det(C)) - computed here as
+    # 0.5 * slogdet(2*pi*e * C) for numerical stability (slogdet avoids
+    # over/underflow from computing det(C) directly for large C).
+    #
+    # `good_pixels` filters out any variable whose marginal variance
+    # (diagonal entry) is effectively zero - this matters for the real-data
+    # Gaussian fit (get_gaussian_fit): pixels that are constant across every
+    # sample image (e.g. a fixed black border) have zero empirical variance,
+    # which would make the sub-covariance matrix singular (and its log-det
+    # -infinity) if left in; excluding them treats a deterministic pixel as
+    # contributing zero entropy instead, which is the correct limit.
 
     remove = np.asarray(remove)
     keep = np.asarray(keep)
@@ -114,8 +177,15 @@ def get_marginal_entropy(cov, remove = [], keep = []):
 
 def get_gaussian_mutual_information(cov, variable_indices_a):
 
-    # This function computes the MI for a Gaussian distribution
-    # with the given covariance matrix.
+    # Exact closed-form MI between a set of variables `variable_indices_a`
+    # (e.g. the inner patch) and every other variable in the Gaussian
+    # (the outer patch), via the standard identity
+    # MI(A; B) = S(A) + S(B) - S(A, B) - the sum of the two marginal
+    # entropies minus their joint entropy. This is the "ground truth" that
+    # the neural estimator in src/mine.py is checked against for the
+    # synthetic GMRF fields (see examples.ipynb's Gaussian-validation
+    # section), since for a genuinely Gaussian distribution there's no need
+    # to estimate MI from samples at all - it follows directly from `cov`.
 
     entropy_a = get_marginal_entropy(cov, keep = variable_indices_a)
     entropy_b = get_marginal_entropy(cov, remove = variable_indices_a)
@@ -125,8 +195,15 @@ def get_gaussian_mutual_information(cov, variable_indices_a):
 
 def get_gaussian_fit(sample_images):
 
-    # This function fits a Gaussian to a given sample of 
-    # images.
+    # Fits the maximum-likelihood Gaussian (sample mean + sample covariance)
+    # to a set of real (non-Gaussian) images, flattened to one long vector
+    # per image first. This is only ever an approximation for real data -
+    # see get_marginal_entropy's docstring and README.md's discussion of
+    # why a Gaussian fit systematically underestimates the true MI of
+    # non-Gaussian data (it can only capture pairwise/linear structure) -
+    # but it's a useful, instantly-computable lower bound (via
+    # get_gaussian_mutual_information) when no closed form for the true
+    # distribution exists.
 
     flat_images = np.reshape(sample_images, [sample_images.shape[0], -1])
     mean = np.mean(flat_images, axis = 0)
@@ -135,10 +212,13 @@ def get_gaussian_fit(sample_images):
 
 def get_analytic_MI(cov, image_shape, max_length):
 
-    # This function computes the exact mutual information
-    # between an inner and outer patch of variable in a 
-    # Gaussian Markov random field, with patch sizes ranging
-    # from 1 to max_length.
+    # Computes the exact MI (get_gaussian_mutual_information) between a
+    # centered square inner patch and its surrounding outer patch, for
+    # every partition side length from 1 to max_length - 1 inclusive - i.e.
+    # the same "MI vs. partition length" scaling curve that mine.py's neural
+    # estimator produces from finite samples, but computed directly and
+    # exactly from the known covariance matrix, with zero sampling error and
+    # no training required.
 
     mi = []
     for length in range(1, max_length):
@@ -148,11 +228,14 @@ def get_analytic_MI(cov, image_shape, max_length):
         known_mi = get_gaussian_mutual_information(cov, inner_indices)
         mi.append(known_mi)
     return mi
-    
+
 def get_gaussian_images(cov, mean, num_images):
 
-    # This function samples images from a Gaussian distribution
-    # with the specified mean and covariance.
+    # Draws num_images independent samples from the N(mean, cov) Gaussian
+    # distribution and reshapes each flat length**2-vector sample back into
+    # a length x length square "image" (cov is assumed to be a perfect
+    # square in size, i.e. built by one of the get_*_cov functions above or
+    # get_gaussian_fit).
 
     length = int(cov.shape[0] ** 0.5)
     flat_images = np.random.multivariate_normal(mean = mean, cov = cov, size = [num_images], check_valid = 'raise')
