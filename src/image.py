@@ -50,6 +50,28 @@ def get_center_region(length, img_height, img_width):
     region = (top, top + length, left, left + length)
     return region
 
+
+def get_corner_region(length, img_height, img_width, corner):
+
+    # Returns a length x length square patch anchored at one of the four
+    # image corners. This is used for the non-middle MI scaling experiment
+    # where the "inner" region starts in a corner rather than in the center.
+
+    if length > img_height or length > img_width:
+        raise ValueError("Requested corner patch length {} exceeds image size {}x{}".format(length, img_height, img_width))
+
+    if corner == 'top_left':
+        region = (0, length, 0, length)
+    elif corner == 'top_right':
+        region = (0, length, img_width - length, img_width)
+    elif corner == 'bottom_left':
+        region = (img_height - length, img_height, 0, length)
+    elif corner == 'bottom_right':
+        region = (img_height - length, img_height, img_width - length, img_width)
+    else:
+        raise ValueError("Corner '{}' not recognized".format(corner))
+    return region
+
 # --- Gaussian Markov random field (GMRF) constructors ---------------------
 #
 # Each of the next three functions builds the *precision matrix* Q (inverse

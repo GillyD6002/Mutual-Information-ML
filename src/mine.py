@@ -400,18 +400,22 @@ def cycle_generator(generator_fn, *args, **kwargs):
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
-def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE, marginal_mode = 'splice'):
+def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE, marginal_mode = 'splice', region_fn = None):
 
     # This is the top-level, one-call entry point for a single MI
     # measurement: given a dataset (`alg_settings["image_type"]`) and a
-    # partition length (`inner_length`, the side length of the centered
-    # square inner patch - see image.get_center_region), it loads the
-    # images, builds and trains a fresh classifier from scratch to
+    # partition length (`inner_length`, the side length of the inner patch),
+    # it loads the images, builds and trains a fresh classifier from scratch to
     # distinguish that dataset's joint vs. marginal samples (get_finite_dataset),
     # and returns its (indirect, direct) MI estimate (Model.evaluate_MI).
     # Every scaling-curve sweep in this project - the notebook, alg.ini's own
     # CLI loop below, image_noncrop_experiment.py, etc. - is just this
     # function called once per partition length.
+    #
+    # If `region_fn` is provided, it is called with (inner_length, height,
+    # width) to produce the inner patch (e.g. image.get_corner_region for a
+    # patch anchored at a corner instead of the center). If not provided,
+    # the original centered region is used.
     #
     # eval_steps controls how many validation batches evaluate_MI averages
     # over; the default of 5000 matches the paper's full-scale runs, but a
@@ -438,7 +442,10 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
         target_size = target_size)
     (_, height, width) = images.shape
     images = np.expand_dims(images, axis = 3)
-    inner_region = img.get_center_region(inner_length, height, width)
+    if region_fn is None:
+        inner_region = img.get_center_region(inner_length, height, width)
+    else:
+        inner_region = region_fn(inner_length, height, width)
 
     # `algorithm` is read from alg_settings here (rather than relied on as a
     # module/enclosing-scope global) so that this function is fully
