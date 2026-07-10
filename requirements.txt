@@ -11,17 +11,11 @@
 #     recognition dataset.
 #   - datasets (Hugging Face) supplies FER-2013 via the clip-benchmark/wds_fer2013
 #     mirror, since FER-2013 was removed from the tensorflow-datasets catalog.
-#   - nltk is used only by src/language.py, the 1D word-sequence experiment
-#     (see README.md "1D scaling experiment: language word sequences").
-#   - gensim supplies pretrained GloVe embeddings for the embedding-based
-#     variant of that same experiment (src/language_embedding_experiment.py).
 #   - On Windows, use Python 3.13: TensorFlow has no cp314 Windows wheel yet
 #     (stable or nightly). See README.md "A note on Python 3.14".
 
 datasets>=2.19
-gensim>=4.3
 matplotlib>=3.8
-nltk>=3.8
 notebook>=7.0
 numpy>=2.0
 pillow>=10.0

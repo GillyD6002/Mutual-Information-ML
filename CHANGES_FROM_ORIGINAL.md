@@ -11,7 +11,7 @@ The original repository was written in 2021-2022 against TensorFlow 2.6.5 and Nu
 - **The Tiny Images dataset** (`tiny`/`gauss_tiny` sources) — this 80-million-image dataset was permanently taken offline by its creators (MIT/NYU) in 2020 due to documented ethical concerns about offensive/biased content, and is no longer obtainable.
 - **Large pre-computed trial files** (`averages/*.npy`, `trials/*.npy`) — the arrays behind the paper's published figures (hundreds of training runs, averaged). The original README itself says "it is missing some of the large data files that are needed for all portions of the code to run."
 
-Getting the notebook to run at all on a current machine required upgrading the TensorFlow/Keras API calls, which surfaced several bugs in the original code that had been silently tolerated by the old API. From there, the project grew into a broader modernization: replacing Tiny Images with several currently-available datasets, replacing the missing pre-computed figures with everything reproduced live, and (in this session) a substantial new experiment (1D word-sequence MI scaling, an analog of the paper's 2D image analysis applied to text) that doesn't exist in the original at all.
+Getting the notebook to run at all on a current machine required upgrading the TensorFlow/Keras API calls, which surfaced several bugs in the original code that had been silently tolerated by the old API. From there, the project grew into a broader modernization: replacing Tiny Images with several currently-available datasets, and replacing the missing pre-computed figures with everything reproduced live.
 
 ## 2. Environment and dependencies
 
@@ -22,7 +22,7 @@ Getting the notebook to run at all on a current machine required upgrading the T
 | NumPy | `== 1.19.5` (exact pin) | `>= 2.0` |
 | `requirements.txt` | 383-line `pip-compile` lockfile, pinning every transitive dependency (old Jupyter stack, `tensorboard==2.6.0`, etc.) | ~15-line direct-dependency list with minimum versions, each annotated with *why* it's needed |
 
-New direct dependencies added, none of which existed in the original: `scikit-learn` (LFW dataset), `datasets` (Hugging Face, FER-2013), `pillow` (image resizing), `nltk` and `gensim` (the new language/text experiment).
+New direct dependencies added, none of which existed in the original: `scikit-learn` (LFW dataset), `datasets` (Hugging Face, FER-2013), `pillow` (image resizing).
 
 ## 3. `src/mine.py` — bug fixes required by the TensorFlow/Keras version bump
 
@@ -50,7 +50,7 @@ def run_bipartition(inner_length, alg_settings, param_settings):
         net = LogisticRegression(...)
 ```
 
-This only worked because `__main__` happened to set a **module-level global** `algorithm = alg_settings["algorithm"]` before calling `run_bipartition` (Python functions can read module globals they never declared). That makes `run_bipartition` silently dependent on `__main__` having already run — it is not actually a self-contained, reusable function. Since this project now calls `run_bipartition` directly from the notebook, from `src/image_noncrop_experiment.py`, and indirectly from `src/sequence.py`'s 1D analog — none of which ever execute `src/mine.py`'s `__main__` block — the original code would raise `NameError: name 'algorithm' is not defined` in every one of those call sites. Fixed by reading it from the parameter that was already right there: `algorithm = alg_settings["algorithm"]` as the first line of the function body.
+This only worked because `__main__` happened to set a **module-level global** `algorithm = alg_settings["algorithm"]` before calling `run_bipartition` (Python functions can read module globals they never declared). That makes `run_bipartition` silently dependent on `__main__` having already run — it is not actually a self-contained, reusable function. Since this project now calls `run_bipartition` directly from the notebook and from `src/image_noncrop_experiment.py` — neither of which ever executes `src/mine.py`'s `__main__` block — the original code would raise `NameError: name 'algorithm' is not defined` in both of those call sites. Fixed by reading it from the parameter that was already right there: `algorithm = alg_settings["algorithm"]` as the first line of the function body.
 
 ## 5. `src/mine.py` — additive changes (new capability, old behavior unchanged)
 
@@ -87,7 +87,6 @@ All six were removed and replaced by a single general-purpose function, **`plot_
 ## 8. Entirely new modules (nothing in the original corresponds to these)
 
 - **`src/image_noncrop_experiment.py`** — reruns the real-dataset MI-scaling sweep at each dataset's *native* resolution (CIFAR-10 at 32×32, LFW at 94×94, FER-2013 at 48×48) instead of the fixed 28×28 every dataset gets conformed to elsewhere, to measure how much information that downsizing throws away. Sweeps the entire image (length 1 through the dataset's full size), not just a truncated range, so the resulting curves show the complete rise, peak, and forced decline back to ~0 once the outer patch runs out of pixels. Results land in `image_noncrop_results/`.
-- **`src/sequence.py`**, **`src/language.py`**, **`src/language_experiment.py`**, **`src/language_embedding_experiment.py`** — a full 1D analog of the paper's 2D image analysis, applied to natural-language text (the NLTK Gutenberg corpus) instead of images: MI between a centered window of consecutive words and the surrounding text, as a function of window length. `sequence.py` provides the 1D version of `image.py`'s partitioning/splicing logic and explicitly reuses `mine.py`'s `Model`/`LogisticRegression`/`MINE` classes completely unmodified (they make no assumption about input rank — a `(num_samples, length)` sequence flows through the same `Input → Flatten → Dense` architecture a `(28, 28, 1)` image does). `language.py` builds the word sequences two ways: a crude per-word `log(frequency rank)` scalar encoding, or (in the `_embedding` variant) full pretrained GloVe embedding vectors via `gensim`. This experiment and everything it depends on is new; none of it exists in the original repository in any form. Results land in `language_results/`.
 
 ## 9. `examples.ipynb` — from static reference figures to a fully live-computed notebook
 
@@ -113,7 +112,7 @@ The original's README is 9 lines of prose plus a paper abstract. This fork's REA
 ## 12. Repository hygiene (no functional effect)
 
 - Added `.gitignore` (`__pycache__/`, `*.pyc`, `.venv/`, `.ipynb_checkpoints/`); the original had none, and had `src/__pycache__/*.pyc` committed to git.
-- Generated output was reorganized into three parallel `*_results/` folders (`image_results/`, `image_noncrop_results/`, `language_results/`) instead of accumulating at the repository root; the original saved its (offline-generated, not-included) figures to a single flat `figures/` folder.
+- Generated output was reorganized into parallel `*_results/` folders (`image_results/`, `image_noncrop_results/`) instead of accumulating at the repository root; the original saved its (offline-generated, not-included) figures to a single flat `figures/` folder.
 - Removed `src/README.md`, a one-line junk file that contained only the text "README.md".
 
 ## 13. Annotation pass (comments only — no logic changed)

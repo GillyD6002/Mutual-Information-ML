@@ -58,7 +58,7 @@ Note that `lfw_faces` is a face-*recognition* (identity) dataset, not a facial-*
 
 Area/boundary law and volume law are defined by the *growth rate* of the rising portion of the curve: MI ~ L (linear, since a square patch's boundary/perimeter grows as ~4L in 2D) is a boundary/area law, while MI ~ L² (quadratic, tracking the patch's area) is a volume law. That's a claim about the early rise, before finite-size effects take over - and *every* curve here eventually turns over and declines back toward 0 as the inner patch approaches the full image (the outer patch runs out of pixels to correlate with), regardless of which law governs its growth. That decline is universal, not something that only happens to area-law curves - an easy trap to fall into when eyeballing where a curve peaks.
 
-Fitting the actual exponent (log(MI) vs log(L), matching `language_experiment.py`'s existing power-law fit) over the early rise, at a consistent *relative* fraction of each dataset's own native size (this matters: L=10 is 36% of MNIST's 28px width but only 11% of LFW's 94px width, so comparing raw pixel-length windows across differently-sized datasets isn't a fair comparison) gives, robust across several fraction choices:
+Fitting the actual exponent (log(MI) vs log(L), via a linear fit in log-log space) over the early rise, at a consistent *relative* fraction of each dataset's own native size (this matters: L=10 is 36% of MNIST's 28px width but only 11% of LFW's 94px width, so comparing raw pixel-length windows across differently-sized datasets isn't a fair comparison) gives, robust across several fraction choices:
 
 | Dataset | Exponent | Verdict |
 | --- | --- | --- |
@@ -115,9 +115,9 @@ python -m src.mine
 
 ## Project layout
 
-- `src/` - all source code (`image.py`, `mine.py` are the core MI-estimation pipeline; `sequence.py`/`language.py`/`language_experiment.py`/`language_embedding_experiment.py` are the 1D word-sequence analog; `image_noncrop_experiment.py` is the non-cropped real-dataset sweep).
+- `src/` - all source code (`image.py`, `mine.py` are the core MI-estimation pipeline; `image_noncrop_experiment.py` is the non-cropped real-dataset sweep).
 - `examples.ipynb` - the main walkthrough notebook; start here.
-- `image_results/`, `image_noncrop_results/`, `language_results/` - generated output (`.npy` arrays and plots) from the notebook and the standalone experiment scripts, one folder per experiment family.
+- `image_results/`, `image_noncrop_results/` - generated output (`.npy` arrays and plots) from the notebook and the standalone experiment scripts, one folder per experiment family.
 - `alg.ini`, `mine.ini` - config files for the `python -m src.mine` CLI entry point.
 - `CHANGELOG.md` - development history of this modernized fork; not needed to use the project, kept for context on *why* things are the way they are.
 

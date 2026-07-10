@@ -30,8 +30,7 @@ from src import mine, image as img
 # This is a NEW, standalone script: src/image.py and src/mine.py keep their
 # existing default behavior unchanged (mine.run_bipartition's target_size
 # argument defaults to the original 28, so every existing caller -
-# alg.ini/mine.ini-driven runs, examples.ipynb, language_experiment.py - is
-# unaffected). Run as:
+# alg.ini/mine.ini-driven runs, examples.ipynb - is unaffected). Run as:
 #     python -m src.image_noncrop_experiment
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image_noncrop_results")

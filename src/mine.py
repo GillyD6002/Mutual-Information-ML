@@ -319,6 +319,72 @@ def get_finite_dataset(images, inner_region, batch_size, loop = True):
             joint_images = images[image_choice]
             yield ((joint_images, mixed_images), (np.zeros(joint_images.shape[0]), np.zeros(mixed_images.shape[0])))
 
+CORRUPTION_MODES = ('blackout', 'randomize_real', 'randomize_uniform')
+
+def get_corrupted_dataset(images, inner_region, batch_size, mode, loop = True):
+
+    # An ablation of get_finite_dataset, built to test whether that
+    # function's cross-image splicing is actually necessary, or whether a
+    # "marginal" sample can instead be built more cheaply by taking a single
+    # real image's own real inner patch and just corrupting everything
+    # outside it:
+    #
+    #   - "joint" batch: identical to get_finite_dataset's - real, untouched
+    #     images.
+    #   - "marginal" batch: each image's own real inner patch, kept exactly
+    #     as-is, with everything outside `inner_region` replaced according
+    #     to `mode`:
+    #       - "blackout": outer patch forced to 0.
+    #       - "randomize_uniform": outer patch replaced with fresh i.i.d.
+    #         Uniform(0, 1) noise per pixel, ignoring the dataset's real
+    #         pixel statistics entirely.
+    #       - "randomize_real": each image's own outer pixel *values* are
+    #         randomly reshuffled among themselves (a per-image permutation,
+    #         restricted to just the outer positions) - this preserves that
+    #         image's own real brightness/contrast statistics in the outer
+    #         region (unlike "blackout"/"randomize_uniform", which can hand
+    #         the classifier an easy give-away like "the outer patch is much
+    #         darker/brighter than any real one"), while still destroying
+    #         its real spatial structure.
+    #
+    # Because the "marginal" sample's inner patch here is a real image's own
+    # real inner patch rather than one spliced in from an unrelated image
+    # (contrast get_finite_dataset), this is *not* a true product-of-
+    # marginals p(inner)*p(outer) sample - it instead tests a narrower
+    # question: can the classifier tell "real full image" from "real inner
+    # patch + corrupted outer" without the get_mixed_indices machinery at
+    # all. If the resulting MI estimate looks similar to get_finite_dataset's,
+    # that's evidence the expensive cross-image splicing is redundant; if it
+    # looks wildly different (e.g. inflated, because corruption is trivially
+    # detectable), that's evidence the splicing is doing real work.
+
+    if mode not in CORRUPTION_MODES:
+        raise ValueError('Corruption mode {} not recognized.'.format(mode))
+    num_batches = math.ceil(images.shape[0] / batch_size)
+    (top, bottom, left, right) = inner_region
+    outer_mask = np.ones(images.shape[1:3], dtype = bool)
+    outer_mask[top:bottom, left:right] = False
+    rand = np.random.RandomState()
+    if loop:
+        itr = iter(int, 1) # Infinite iterator
+    else:
+        itr = range(1)
+    for _ in itr:
+        image_indices = Index(images.shape[0])
+        for _ in range(num_batches):
+            image_choice = image_indices.draw(batch_size)
+            joint_images = images[image_choice]
+            if mode == 'blackout':
+                corrupted_images = np.zeros_like(joint_images)
+            elif mode == 'randomize_uniform':
+                corrupted_images = rand.uniform(0, 1, size = joint_images.shape).astype(joint_images.dtype)
+            elif mode == 'randomize_real':
+                corrupted_images = joint_images.copy()
+                for i in range(corrupted_images.shape[0]):
+                    corrupted_images[i][outer_mask] = rand.permutation(corrupted_images[i][outer_mask])
+            corrupted_images[:, top:bottom, left:right] = joint_images[:, top:bottom, left:right]
+            yield ((joint_images, corrupted_images), (np.zeros(joint_images.shape[0]), np.zeros(corrupted_images.shape[0])))
+
 def cycle_generator(generator_fn, *args, **kwargs):
 
     # Repeatedly re-invokes a finite generator factory (i.e. calls
@@ -334,7 +400,7 @@ def cycle_generator(generator_fn, *args, **kwargs):
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
-def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE):
+def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE, marginal_mode = 'splice'):
 
     # This is the top-level, one-call entry point for a single MI
     # measurement: given a dataset (`alg_settings["image_type"]`) and a
@@ -356,6 +422,13 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
     # alg.ini/mine.ini-driven runs and notebook cells are unaffected. Pass a
     # larger value to train on less-aggressively downsized images (e.g. a
     # dataset's native resolution) - see src/image_noncrop_experiment.py.
+    #
+    # marginal_mode selects how "marginal" batches are built: the default
+    # 'splice' uses get_finite_dataset's cross-image splicing (the original
+    # method); any of CORRUPTION_MODES instead routes through
+    # get_corrupted_dataset, an ablation that corrupts a single real image's
+    # own outer patch instead of splicing in an unrelated one - see
+    # get_corrupted_dataset's docstring for why this exists.
 
     num_images = max(1, int(alg_settings["num_images"]))
     (images, _, _) = img.get_images(
@@ -388,8 +461,12 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
     train_steps = int(np.ceil(train_images.shape[0] / batch_size))
     val_steps = int(np.ceil(val_images.shape[0] / batch_size))
 
-    train_itr = get_finite_dataset(train_images, inner_region, batch_size, loop = True)
-    val_itr = cycle_generator(get_finite_dataset, val_images, inner_region, batch_size)
+    if marginal_mode == 'splice':
+        train_itr = get_finite_dataset(train_images, inner_region, batch_size, loop = True)
+        val_itr = cycle_generator(get_finite_dataset, val_images, inner_region, batch_size)
+    else:
+        train_itr = get_corrupted_dataset(train_images, inner_region, batch_size, marginal_mode, loop = True)
+        val_itr = cycle_generator(get_corrupted_dataset, val_images, inner_region, batch_size, marginal_mode)
 
     net.train(train_itr, val_itr, train_steps, val_steps, int(param_settings['epoch']))
     (est_mi, direct_mi) = net.evaluate_MI(val_itr, eval_steps)
