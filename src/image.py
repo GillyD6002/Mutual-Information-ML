@@ -72,6 +72,36 @@ def get_corner_region(length, img_height, img_width, corner):
         raise ValueError("Corner '{}' not recognized".format(corner))
     return region
 
+
+def get_grid_region(length, img_height, img_width, row, col, grid_size = 3):
+
+    # Returns a length x length square patch centered on the (row, col) cell
+    # of a grid_size x grid_size grid overlaid on the image (row/col each in
+    # range(grid_size)) - the generalization of get_center_region (which is
+    # exactly the grid_size=3, row=col=1 case) to any number of evenly
+    # spaced anchor points, for the 9-cell "moving slideshow" MI-scaling
+    # sweep. Small patches are genuinely centered on their cell's center
+    # point; once a patch grows too large to fit within the image while
+    # staying centered there, it's clamped to the nearest valid position
+    # (sliding flush against whichever edge(s) it would otherwise cross) -
+    # so cells near a border naturally converge toward corner/edge-anchored
+    # behavior for larger lengths, exactly like get_corner_region already
+    # does, while every cell still converges to the full image at
+    # length = img_height = img_width, same as every other region function
+    # in this module.
+
+    if length > img_height or length > img_width:
+        raise ValueError("Requested grid patch length {} exceeds image size {}x{}".format(length, img_height, img_width))
+    if not (0 <= row < grid_size and 0 <= col < grid_size):
+        raise ValueError("Grid cell ({}, {}) out of range for grid_size {}".format(row, col, grid_size))
+
+    row_center = int((row + 0.5) * img_height / grid_size)
+    col_center = int((col + 0.5) * img_width / grid_size)
+    top = min(max(row_center - length // 2, 0), img_height - length)
+    left = min(max(col_center - length // 2, 0), img_width - length)
+    region = (top, top + length, left, left + length)
+    return region
+
 # --- Gaussian Markov random field (GMRF) constructors ---------------------
 #
 # Each of the next three functions builds the *precision matrix* Q (inverse

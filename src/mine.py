@@ -1,5 +1,6 @@
 import configparser
 import ast
+import gc
 import math
 
 import tensorflow as tf
@@ -477,7 +478,25 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
 
     net.train(train_itr, val_itr, train_steps, val_steps, int(param_settings['epoch']))
     (est_mi, direct_mi) = net.evaluate_MI(val_itr, eval_steps)
-    return [est_mi, direct_mi]
+    result = [est_mi, direct_mi]
+
+    # Each call builds a brand-new Model (fresh Keras graph/session state,
+    # see Model.build_model) and nothing here ever frees the previous one's -
+    # over a long sweep (a script calling run_bipartition hundreds of times
+    # in one process, e.g. MI_scaling_non_middle/corner_mi_scaling.py) that
+    # accumulates until the process runs out of memory partway through,
+    # unrelated to how large any single training run's own arrays are.
+    # `del` first: gc.collect() can only reclaim objects with no live
+    # references, and net/images/the iterators are all still referenced by
+    # this function's own locals until explicitly dropped - calling
+    # gc.collect() without this first is a no-op on exactly the objects it's
+    # meant to free. clear_session then releases the global Keras
+    # graph/session state those objects were using.
+    del net, images, train_images, val_images, train_itr, val_itr
+    ks.backend.clear_session()
+    gc.collect()
+
+    return result
 
 if __name__ == "__main__":
 
