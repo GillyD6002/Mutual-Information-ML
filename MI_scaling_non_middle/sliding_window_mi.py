@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 
@@ -198,14 +199,43 @@ def plot_combined(image_type, heatmaps_by_size):
     plt.close()
 
 
+def parse_args():
+
+    # Lets a single (dataset, window-size) slice of the sweep be run per
+    # process - e.g. one container per GPU - without touching the defaults
+    # that make plain `python -m ...sliding_window_mi` still run everything,
+    # same as before this flag existed.
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--datasets", type=str, default=None,
+                         help="Comma-separated subset of DATASETS keys to run (default: all)")
+    parser.add_argument("--window-sizes", type=str, default=None,
+                         help="Comma-separated subset of WINDOW_SIZES to run (default: all)")
+    return parser.parse_args()
+
+
 def main():
-    for (image_type, target_size) in DATASETS.items():
+    args = parse_args()
+    datasets = DATASETS
+    if args.datasets:
+        keys = [key.strip() for key in args.datasets.split(",")]
+        datasets = {key: DATASETS[key] for key in keys}
+    window_sizes = WINDOW_SIZES
+    if args.window_sizes:
+        window_sizes = [int(w.strip()) for w in args.window_sizes.split(",")]
+
+    for (image_type, target_size) in datasets.items():
         heatmaps_by_size = {}
-        for window_size in WINDOW_SIZES:
+        for window_size in window_sizes:
             (heatmap_direct, positions) = run_sliding_sweep(image_type, target_size, window_size)
             plot_heatmap(image_type, window_size, heatmap_direct, positions)
             heatmaps_by_size[window_size] = (heatmap_direct, positions)
-        plot_combined(image_type, heatmaps_by_size)
+        if len(heatmaps_by_size) == len(WINDOW_SIZES):
+            # Only the full, unsliced set of window sizes makes plot_combined's
+            # shared-color-scale panel meaningful - a partial slice run in one
+            # of several parallel containers would otherwise produce a
+            # misleadingly incomplete combined figure.
+            plot_combined(image_type, heatmaps_by_size)
 
 
 if __name__ == "__main__":
