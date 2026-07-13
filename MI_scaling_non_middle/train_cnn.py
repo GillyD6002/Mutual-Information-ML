@@ -102,11 +102,11 @@ def build_classifier():
     return model
 
 
-def train_classifier(model, x_train, y_train, x_test, y_test):
+def train_classifier(model, x_train, y_train, x_test, y_test, batch_size=BATCH_SIZE):
     model.fit(
         np.expand_dims(x_train, axis=3), y_train,
         validation_data=(np.expand_dims(x_test, axis=3), y_test),
-        batch_size=BATCH_SIZE, epochs=EPOCHS,
+        batch_size=batch_size, epochs=EPOCHS,
         callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)],
         verbose=2,
     )
@@ -131,8 +131,22 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     (x_train, y_train, x_test, y_test) = load_cifar10_grayscale()
 
-    model = build_classifier()
-    train_classifier(model, x_train, y_train, x_test, y_test)
+    # MirroredStrategy splits each batch across every GPU CUDA_VISIBLE_DEVICES
+    # exposes to this process (e.g. both devices requested via `docker run
+    # --gpus '"device=2,3"'`) and keeps a synchronized replica of the model on
+    # each - the standard single-machine multi-GPU data-parallel setup. With
+    # only one GPU visible it transparently reduces to ordinary single-GPU
+    # training, so this is safe to leave in unconditionally. The global batch
+    # size must scale with the number of replicas (each GPU still gets
+    # BATCH_SIZE examples per step) or per-GPU batches shrink as replicas are
+    # added, which would silently change training dynamics/throughput.
+    strategy = tf.distribute.MirroredStrategy()
+    print(f"MirroredStrategy running on {strategy.num_replicas_in_sync} device(s)")
+    global_batch_size = BATCH_SIZE * strategy.num_replicas_in_sync
+
+    with strategy.scope():
+        model = build_classifier()
+    train_classifier(model, x_train, y_train, x_test, y_test, batch_size=global_batch_size)
     (_, test_accuracy) = model.evaluate(np.expand_dims(x_test, axis=3), y_test, verbose=0)
     print(f"Final held-out test accuracy: {test_accuracy:.4f}")
 
