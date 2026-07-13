@@ -401,7 +401,7 @@ def cycle_generator(generator_fn, *args, **kwargs):
     while True:
         yield from generator_fn(*args, **kwargs, loop = False)
 
-def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE, marginal_mode = 'splice', region_fn = None):
+def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 5000, target_size = img.DEFAULT_IMAGE_SIZE, marginal_mode = 'splice', region_fn = None, images = None):
 
     # This is the top-level, one-call entry point for a single MI
     # measurement: given a dataset (`alg_settings["image_type"]`) and a
@@ -434,15 +434,28 @@ def run_bipartition(inner_length, alg_settings, param_settings, eval_steps = 500
     # get_corrupted_dataset, an ablation that corrupts a single real image's
     # own outer patch instead of splicing in an unrelated one - see
     # get_corrupted_dataset's docstring for why this exists.
+    #
+    # `images` lets a caller hand in an already-loaded array instead of one
+    # of img.get_images's named datasets - e.g. a CNN's intermediate-layer
+    # activations (shape (N, H, W, C) for C > 1 channels), rather than a
+    # single-channel pixel image. When given, it's used as-is (no channel
+    # dim is added, since a caller passing a multi-channel array already has
+    # one; a caller wanting the old single-channel behavior should pass an
+    # array already shaped (N, H, W, 1)) and alg_settings["image_type"] /
+    # ["num_images"] / ["strength"] are ignored, exactly like this function
+    # never touched them for anything but the img.get_images call below.
 
-    num_images = max(1, int(alg_settings["num_images"]))
-    (images, _, _) = img.get_images(
-        alg_settings["image_type"],
-        num_images,
-        strength = alg_settings["strength"],
-        target_size = target_size)
-    (_, height, width) = images.shape
-    images = np.expand_dims(images, axis = 3)
+    if images is None:
+        num_images = max(1, int(alg_settings["num_images"]))
+        (images, _, _) = img.get_images(
+            alg_settings["image_type"],
+            num_images,
+            strength = alg_settings["strength"],
+            target_size = target_size)
+        (_, height, width) = images.shape
+        images = np.expand_dims(images, axis = 3)
+    else:
+        (_, height, width) = images.shape[:3]
     if region_fn is None:
         inner_region = img.get_center_region(inner_length, height, width)
     else:
