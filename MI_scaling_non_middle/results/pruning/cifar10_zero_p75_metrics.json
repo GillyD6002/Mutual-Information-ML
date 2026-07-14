@@ -1,0 +1,9 @@
+{
+  "image_type": "cifar10",
+  "condition": "zero",
+  "percent_kept": 0.75,
+  "test_loss": 0.6938986778259277,
+  "test_accuracy": 0.7738000154495239,
+  "epochs_trained": 31,
+  "best_val_accuracy": 0.7738000154495239
+}

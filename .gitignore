@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 .ipynb_checkpoints/
+
+# Trained model weights are regenerable by rerunning
+# train_pruned_classifiers.py; the metrics/history JSON already capture
+# everything meaningful about a run, so the (much larger) weight files
+# aren't committed - matching this repo's existing convention of only
+# committing small result artifacts (plots, small .npy arrays), not large
+# binaries.
+*.keras
