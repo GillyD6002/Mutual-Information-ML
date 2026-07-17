@@ -56,6 +56,8 @@ RESULTS_DIR = os.path.join(ROOT, "MI_scaling_non_middle", "results")
 DATASETS = {
     "mnist": img.DEFAULT_IMAGE_SIZE,
     "cifar10": img.DEFAULT_IMAGE_SIZE,
+    "lfw_faces": img.DEFAULT_IMAGE_SIZE,
+    "fer2013_hf": img.DEFAULT_IMAGE_SIZE,
 }
 WINDOW_SIZES = list(range(3, 9))  # 3x3 through 8x8 inclusive
 STRIDE = 3

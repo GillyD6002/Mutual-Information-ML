@@ -470,8 +470,13 @@ def get_images(source, num_images, strength = "small", target_size = DEFAULT_IMA
         images = _load_fer2013_hf()[:num_images]
         # FER-2013 images are already grayscale floats in [0, 1] at their
         # native 48 x 48 size, so target_size = 48 (the "non-cropped" case)
-        # is a no-op crop and returns them unchanged.
-        images = conform_size(images, target_size, mode = "crop")
+        # is a no-op regardless of mode. For any smaller target_size (e.g.
+        # the pruning experiment's 28 x 28), "resize" is used rather than
+        # "crop" - a 48->28 center crop would trim 10px off every edge,
+        # which for a face-emotion dataset risks losing the mouth/eyebrows
+        # that carry most of the expression, unlike MNIST/CIFAR-10 where
+        # the subject is reliably centered.
+        images = conform_size(images, target_size, mode = "resize")
         cov = np.eye(images.shape[1] * images.shape[2])
         mean = np.zeros(images.shape[1] * images.shape[2])
     elif source == 'mnist_shuffle_independent':
