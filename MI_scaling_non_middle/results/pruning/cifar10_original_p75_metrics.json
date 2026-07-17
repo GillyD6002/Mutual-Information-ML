@@ -2,8 +2,8 @@
   "image_type": "cifar10",
   "condition": "original",
   "percent_kept": 0.75,
-  "test_loss": 0.6321296095848083,
-  "test_accuracy": 0.7900000214576721,
-  "epochs_trained": 24,
-  "best_val_accuracy": 0.794700026512146
+  "test_loss": 0.5785693526268005,
+  "test_accuracy": 0.8065000176429749,
+  "epochs_trained": 36,
+  "best_val_accuracy": 0.8065000176429749
 }

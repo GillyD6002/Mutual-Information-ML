@@ -124,9 +124,99 @@ def make_table(metrics, output_tag="p75"):
     plt.close()
 
 
+def make_combined_table(percents, output_tag="combined"):
+
+    # A second table stacking every (dataset, percent_kept) pair as its own
+    # row - e.g. "MNIST 75%" then "MNIST 50%" - so the poster can show the
+    # actual "crank the percentage further" trend (how much worse does
+    # pruning get as more tiles are dropped) in one image, not just a
+    # single percent_kept snapshot.
+
+    row_specs = [(image_type, percent) for image_type in DATASETS for percent in percents]
+    n_rows = len(row_specs)
+    n_cols = len(CONDITIONS)
+    row_height = 1.0
+    col_width = 2.1
+    label_col_width = 1.9
+    header_height = 0.6
+
+    fig_width = label_col_width + col_width * n_cols
+    fig_height = header_height + row_height * n_rows
+    (fig, axes) = plt.subplots(figsize=(fig_width, fig_height))
+    axes.set_xlim(0, fig_width)
+    axes.set_ylim(0, fig_height)
+    axes.invert_yaxis()
+    axes.axis("off")
+
+    bar_height = 0.07
+    for (col, condition) in enumerate(CONDITIONS):
+        x_start = label_col_width + col * col_width
+        x_center = x_start + col_width / 2
+        axes.text(x_center, header_height / 2 - 0.05, CONDITION_LABELS[condition],
+                   ha="center", va="center", fontsize=13, color=TEXT_PRIMARY, fontweight="bold")
+        axes.add_patch(Rectangle((x_start + 0.15, header_height - bar_height - 0.08),
+                                  col_width - 0.3, bar_height,
+                                  facecolor=CONDITION_COLORS[condition], edgecolor="none"))
+    axes.plot([0, fig_width], [header_height, header_height], color=TEXT_PRIMARY, linewidth=1.5)
+
+    for (row, (image_type, percent_kept)) in enumerate(row_specs):
+        metrics = load_metrics(percent_kept)
+        y_center = header_height + row * row_height + row_height / 2
+
+        # Dataset name only on that dataset's first (highest-percent) row,
+        # so it reads as one label spanning both its percent rows rather
+        # than repeating - the percent itself still labels every row.
+        # Stacked vertically (name above, "keep XX%" below) rather than
+        # side-by-side on the same line: "CIFAR-10" at this font size is
+        # wide enough to collide with a right-aligned percent label in the
+        # same row otherwise.
+        if percent_kept == max(percents):
+            axes.text(0.15, y_center - 0.15, DATASET_LABELS[image_type], ha="left", va="center",
+                       fontsize=14, color=TEXT_PRIMARY, fontweight="bold")
+            axes.text(0.15, y_center + 0.15, f"keep {int(round(percent_kept * 100))}%",
+                       ha="left", va="center", fontsize=11, color=TEXT_SECONDARY)
+        else:
+            axes.text(0.15, y_center, f"keep {int(round(percent_kept * 100))}%",
+                       ha="left", va="center", fontsize=11, color=TEXT_SECONDARY)
+
+        original = metrics[(image_type, "original")]
+        original_acc = original["test_accuracy"] if original else None
+
+        for (col, condition) in enumerate(CONDITIONS):
+            x_center = label_col_width + col * col_width + col_width / 2
+            entry = metrics[(image_type, condition)]
+            if entry is None:
+                axes.text(x_center, y_center, "training…", ha="center", va="center",
+                           fontsize=13, color=TEXT_MUTED, style="italic")
+                continue
+            accuracy = entry["test_accuracy"]
+            axes.text(x_center, y_center - 0.14, f"{accuracy * 100:.2f}%", ha="center", va="center",
+                       fontsize=17, color=TEXT_PRIMARY, fontweight="bold")
+            if condition != "original" and original_acc is not None:
+                delta = (accuracy - original_acc) * 100
+                axes.text(x_center, y_center + 0.22, f"{delta:+.2f} pp vs original", ha="center", va="center",
+                           fontsize=10.5, color=TEXT_SECONDARY)
+
+        is_last_of_dataset = percent_kept == min(percents)
+        if row < n_rows - 1:
+            y_rule = header_height + (row + 1) * row_height
+            rule_color = TEXT_PRIMARY if is_last_of_dataset else RULE_COLOR
+            rule_width = 1.2 if is_last_of_dataset else 1
+            axes.plot([0, fig_width], [y_rule, y_rule], color=rule_color, linewidth=rule_width)
+
+    plt.tight_layout()
+    for ext in ("png", "pdf"):
+        path = os.path.join(OUTPUT_DIR, f"accuracy_table_{output_tag}.{ext}")
+        plt.savefig(path, dpi=300 if ext == "png" else None, facecolor="white", bbox_inches="tight")
+        print(f"saved {path}")
+    plt.close()
+
+
 def main():
-    metrics = load_metrics(0.75)
-    make_table(metrics, "p75")
+    for percent_kept in (0.75, 0.5):
+        metrics = load_metrics(percent_kept)
+        make_table(metrics, f"p{int(round(percent_kept * 100))}")
+    make_combined_table([0.75, 0.5], "combined")
 
 
 if __name__ == "__main__":

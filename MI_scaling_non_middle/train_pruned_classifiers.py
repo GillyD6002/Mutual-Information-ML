@@ -14,28 +14,33 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from src import image as img
-from MI_scaling_non_middle.pixel_pruning import (
-    build_tile_mask, build_voronoi_assignment, voronoi_pixel_mask, load_corner_grid_mi, apply_pruning,
-)
+from MI_scaling_non_middle.pixel_pruning import build_tile_mask, pixel_mask_from_edges, load_sliding_window_mi, apply_pruning
 
-# Trains the same CNN architecture, for the same training budget, on three
-# versions of each dataset:
+# Trains a matched CNN, for the same training budget across its own three
+# conditions, on three versions of each dataset:
 #   - "original": untouched images.
 #   - "zero": pixels in the bottom (1 - percent_kept) fraction of tiles (by
-#     MI, reusing corner_mi_scaling.py's already-computed 3x3 grid sweep -
-#     see pixel_pruning.load_corner_grid_mi) forced to 0.
+#     MI, reusing sliding_window_mi.py's already-computed window=3/stride=3
+#     sweep - see pixel_pruning.load_sliding_window_mi) forced to 0.
 #   - "noise": those same pruned pixels replaced with fresh i.i.d. noise
 #     drawn uniformly between the dataset's own min/max pixel value.
 # The comparison this produces (does classification accuracy survive
 # pruning the *lowest*-MI tiles?) is the actual pruning experiment; this
 # script only trains and records metrics - pixel_pruning.py supplies the MI
-# ranking (reused from corner_mi_scaling.py, no fresh MI measurement is run)
+# ranking (reused from sliding_window_mi.py, no fresh MI measurement is run)
 # and builds the mask/does the corruption.
 #
 # Architecture is deliberately NOT train_cnn.py's 3-conv/no-pooling network
 # - that one was built so its activations stay 28x28 for re-mining MI, not
-# for classification accuracy. This uses a conventional conv+pool+dropout
-# CNN sized for MNIST/CIFAR-10-scale classification instead.
+# for classification accuracy. MNIST uses a conventional 2-block
+# conv+pool+dropout CNN; CIFAR-10 - a meaningfully harder task at this same
+# grayscale, center-cropped-to-28x28 resolution, so its accuracy ceiling is
+# well below what color, full-resolution CIFAR-10 benchmarks reach - gets a
+# deeper, wider, augmented network of its own (build_cifar10_classifier), on
+# a larger epoch budget, since a bigger network needs more room to converge.
+# The two datasets were never meant to share one architecture's capacity;
+# only each dataset's *own* three conditions need to train identically for
+# the pruning comparison to be fair (see below), and they still do.
 #
 # "Do the same amount of training to keep it fair" (the user's framing) is
 # implemented as: identical architecture, optimizer, batch size, max epochs,
@@ -47,7 +52,7 @@ from MI_scaling_non_middle.pixel_pruning import (
 # would bias the comparison in the other direction (rewarding whichever
 # condition happens to overfit slowest).
 #
-# Run as (needs corner_mi_scaling.py's `--grid` sweep to have been run for
+# Run as (needs sliding_window_mi.py's window=3 sweep to have been run for
 # each dataset first - already true for mnist/cifar10 as of this writing):
 #     python -m MI_scaling_non_middle.train_pruned_classifiers
 #     python -m MI_scaling_non_middle.train_pruned_classifiers --percent-kept 0.5
@@ -61,15 +66,22 @@ NUM_CLASSES = 10
 CONDITIONS = ["original", "zero", "noise"]
 DATASETS = ["mnist", "cifar10"]
 
-GRID_SIZE = 3
-# Matches this project's ~9px tile granularity (28 // 3) - see
-# pixel_pruning.load_corner_grid_mi's docstring for why this particular
-# length slice of the existing MI-vs-length curves is what's used here.
-TILE_LENGTH = 9
+# window_size == stride is what makes this sweep a non-overlapping tiling -
+# see pixel_pruning.load_sliding_window_mi's docstring.
+TILE_WINDOW_SIZE = 3
+TILE_STRIDE = 3
 
 BATCH_SIZE = 128
-EPOCHS = 40
-PATIENCE = 6
+# Per-dataset training budget: CIFAR-10's deeper/augmented network needs
+# more epochs to converge than MNIST's smaller one, so it gets a larger
+# budget - this is still "the same amount of training" in the sense that
+# matters (see module docstring): identical across a given dataset's own
+# three conditions, just not identical *between* datasets, which was never
+# a fairness requirement.
+TRAINING_CONFIG = {
+    "mnist": {"epochs": 40, "patience": 6},
+    "cifar10": {"epochs": 60, "patience": 8},
+}
 
 # Fixed so that the *same* noise draw is used for a given (dataset,
 # percent_kept) pair across reruns - a killed/resumed run doesn't silently
@@ -109,30 +121,31 @@ LOADERS = {"mnist": load_mnist_labeled, "cifar10": load_cifar10_labeled}
 
 def load_tile_mask(image_type, percent_kept):
 
-    # Sources the per-tile MI ranking from corner_mi_scaling.py's existing
-    # `--grid` sweep (load_corner_grid_mi) rather than running a fresh MI
-    # measurement - see pixel_pruning.py's module docstring for why this is
-    # both free (already computed) and methodologically cleaner (every cell
-    # measured at the same fixed size, unlike a literal non-overlapping
-    # tiling of a 28px image into 3 equal parts). The keep/prune decision
-    # per cell is expanded to a full pixel mask via a Voronoi partition of
-    # the image around the same 9 cell centers, not the (slightly
-    # non-tiling) box each cell's MI was actually measured on.
+    # Sources the per-tile MI ranking from sliding_window_mi.py's existing
+    # window=3/stride=3 sweep (load_sliding_window_mi) rather than running a
+    # fresh MI measurement - see pixel_pruning.py's module docstring for why
+    # this is both free (already computed) and finer-grained/cleaner than
+    # the coarser alternatives (a 3x3 grid of 9 unequal-size tiles, or a
+    # Voronoi partition of independently-measured boxes). The 81 identically
+    # -sized 3x3 tiles this sweep measured already tile the image almost
+    # exactly (edges from load_sliding_window_mi close the 1px gap its last
+    # position leaves short of the far edge), so pixel_mask_from_edges is a
+    # plain box expansion - no Voronoi step needed.
 
-    heatmap = load_corner_grid_mi(image_type, MI_RESULTS_DIR, grid_size=GRID_SIZE, tile_length=TILE_LENGTH)
+    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
     tile_mask = build_tile_mask(heatmap, percent_kept)
-    assignment = build_voronoi_assignment(IMAGE_SIZE, GRID_SIZE)
-    pixel_mask = voronoi_pixel_mask(tile_mask, assignment)
+    pixel_mask = pixel_mask_from_edges(tile_mask, edges)
     return (pixel_mask, tile_mask, heatmap)
 
 
-def build_classifier():
+def build_mnist_classifier():
 
     # Two conv+conv+pool+dropout blocks (32 then 64 filters) followed by a
     # dense head - a conventional, reasonably strong CNN for 28x28
     # single-channel classification (unlike train_cnn.py's flat,
     # pooling-free network, which trades accuracy for keeping every conv
-    # layer's activation map at input resolution).
+    # layer's activation map at input resolution). MNIST is easy enough at
+    # this resolution that this size is already sufficient to reach ~99.6%.
 
     inputs = ks.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 1))
     x = inputs
@@ -152,6 +165,46 @@ def build_classifier():
     model.compile(optimizer=ks.optimizers.Adam(learning_rate=1e-3),
                   loss="sparse_categorical_crossentropy", metrics=["accuracy"])
     return model
+
+
+def build_cifar10_classifier():
+
+    # A deeper, wider version of build_mnist_classifier for CIFAR-10's
+    # harder task at this same grayscale/28x28 resolution: three
+    # conv+conv+pool+dropout blocks (32/64/128 filters, vs MNIST's two at
+    # 32/64) and a bigger dense head (512 vs 256), plus light train-time-only
+    # data augmentation (RandomFlip/RandomTranslation/RandomZoom - Keras
+    # preprocessing layers that are no-ops during model.evaluate/predict, so
+    # the held-out test set this is scored on is never itself augmented).
+    # Only a horizontal flip and small shifts/zooms are used - nothing that
+    # would plausibly change a CIFAR-10 class label - to reduce overfitting
+    # (train accuracy was pulling well ahead of val accuracy at this
+    # dataset's previous, unaugmented 2-block architecture).
+
+    inputs = ks.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 1))
+    x = inputs
+    x = ks.layers.RandomFlip("horizontal")(x)
+    x = ks.layers.RandomTranslation(0.1, 0.1)(x)
+    x = ks.layers.RandomZoom(0.1)(x)
+    for filters in (32, 64, 128):
+        x = ks.layers.Conv2D(filters, 3, padding="same", activation="relu")(x)
+        x = ks.layers.BatchNormalization()(x)
+        x = ks.layers.Conv2D(filters, 3, padding="same", activation="relu")(x)
+        x = ks.layers.BatchNormalization()(x)
+        x = ks.layers.MaxPooling2D(2)(x)
+        x = ks.layers.Dropout(0.3)(x)
+    x = ks.layers.Flatten()(x)
+    x = ks.layers.Dense(512, activation="relu")(x)
+    x = ks.layers.BatchNormalization()(x)
+    x = ks.layers.Dropout(0.5)(x)
+    outputs = ks.layers.Dense(NUM_CLASSES, activation="softmax")(x)
+    model = ks.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer=ks.optimizers.Adam(learning_rate=1e-3),
+                  loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    return model
+
+
+MODEL_BUILDERS = {"mnist": build_mnist_classifier, "cifar10": build_cifar10_classifier}
 
 
 def condition_tag(image_type, condition, percent_kept):
@@ -185,12 +238,13 @@ def run_condition(image_type, condition, x_train, y_train, x_test, y_test, pixel
         xt = apply_pruning(x_train, pixel_mask, condition, rng)
         xv = apply_pruning(x_test, pixel_mask, condition, rng)
 
-    model = build_classifier()
+    config = TRAINING_CONFIG[image_type]
+    model = MODEL_BUILDERS[image_type]()
     history = model.fit(
         np.expand_dims(xt, axis=3), y_train,
         validation_data=(np.expand_dims(xv, axis=3), y_test),
-        batch_size=batch_size, epochs=EPOCHS,
-        callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)],
+        batch_size=batch_size, epochs=config["epochs"],
+        callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=config["patience"], restore_best_weights=True)],
         verbose=2,
     )
     (test_loss, test_accuracy) = model.evaluate(np.expand_dims(xv, axis=3), y_test, verbose=0)
@@ -228,7 +282,12 @@ def plot_comparison(all_metrics, percent_kept):
         for (bar, accuracy) in zip(bars, accuracies):
             axes.text(bar.get_x() + bar.get_width() / 2, accuracy, f"{accuracy:.3f}",
                        ha="center", va="bottom", fontsize=10)
-        axes.set_ylim(0, 1.0)
+        # Headroom above 1.0 (rather than capping the axis at the data's own
+        # max of 1.0) so a near-ceiling accuracy's value label - drawn just
+        # above its bar - has room to clear the subplot title instead of
+        # overlapping it, which happened for MNIST's ~0.99+ bars.
+        axes.set_ylim(0, 1.08)
+        axes.set_yticks(np.arange(0, 1.01, 0.2))
         axes.set_ylabel("Test accuracy")
         axes.set_title(dataset)
     fig.suptitle(f"Effect of pruning the lowest-MI {int(round((1 - percent_kept) * 100))}% of tiles "

@@ -2,8 +2,8 @@
   "image_type": "mnist",
   "condition": "zero",
   "percent_kept": 0.75,
-  "test_loss": 0.018313048407435417,
-  "test_accuracy": 0.9944000244140625,
-  "epochs_trained": 18,
-  "best_val_accuracy": 0.9945999979972839
+  "test_loss": 0.018969286233186722,
+  "test_accuracy": 0.9941999912261963,
+  "epochs_trained": 10,
+  "best_val_accuracy": 0.9941999912261963
 }

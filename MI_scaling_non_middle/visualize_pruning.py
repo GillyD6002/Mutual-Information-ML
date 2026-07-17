@@ -10,24 +10,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from src import image as img
-from MI_scaling_non_middle.pixel_pruning import (
-    build_tile_mask, build_voronoi_assignment, voronoi_pixel_mask, load_corner_grid_mi, apply_pruning,
-)
+from MI_scaling_non_middle.pixel_pruning import build_tile_mask, pixel_mask_from_edges, load_sliding_window_mi, apply_pruning
 
 # A quick, GPU-free sanity check of the pruning pipeline: for each dataset,
-# shows the tile MI heatmap (reused from corner_mi_scaling.py's existing
-# `--grid` sweep, see pixel_pruning.load_corner_grid_mi), the resulting
-# keep/prune mask, and a handful of real example images before/after zero-
-# and noise-pruning. Doesn't train anything - just lets the masking logic
-# (pixel_pruning.py) be checked by eye before spending GPU time on the
-# actual training sweep (train_pruned_classifiers.py). Run as:
+# shows the tile MI heatmap (reused from sliding_window_mi.py's existing
+# window=3/stride=3 sweep, see pixel_pruning.load_sliding_window_mi), the
+# resulting keep/prune mask, and a handful of real example images before/
+# after zero- and noise-pruning. Doesn't train anything - just lets the
+# masking logic (pixel_pruning.py) be checked by eye before spending GPU
+# time on the actual training sweep (train_pruned_classifiers.py). Run as:
 #     python -m MI_scaling_non_middle.visualize_pruning
 #     python -m MI_scaling_non_middle.visualize_pruning --percent-kept 0.5
 
 MI_RESULTS_DIR = os.path.join(ROOT, "MI_scaling_non_middle", "results")
 RESULTS_DIR = os.path.join(MI_RESULTS_DIR, "pruning")
-GRID_SIZE = 3
-TILE_LENGTH = 9
+TILE_WINDOW_SIZE = 3
+TILE_STRIDE = 3
 NUM_EXAMPLES = 4
 NOISE_SEED = 20260714
 
@@ -37,10 +35,9 @@ def ensure_results_dir():
 
 
 def visualize(image_type, percent_kept):
-    heatmap = load_corner_grid_mi(image_type, MI_RESULTS_DIR, grid_size=GRID_SIZE, tile_length=TILE_LENGTH)
+    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
     tile_mask = build_tile_mask(heatmap, percent_kept)
-    assignment = build_voronoi_assignment(img.DEFAULT_IMAGE_SIZE, GRID_SIZE)
-    pixel_mask = voronoi_pixel_mask(tile_mask, assignment)
+    pixel_mask = pixel_mask_from_edges(tile_mask, edges)
 
     (images, _, _) = img.get_images(image_type, NUM_EXAMPLES, target_size=img.DEFAULT_IMAGE_SIZE)
     rng = np.random.RandomState(NOISE_SEED)

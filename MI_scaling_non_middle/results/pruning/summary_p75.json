@@ -3,54 +3,54 @@
     "image_type": "mnist",
     "condition": "original",
     "percent_kept": 0.75,
-    "test_loss": 0.013583255000412464,
-    "test_accuracy": 0.9962999820709229,
-    "epochs_trained": 25,
-    "best_val_accuracy": 0.9962999820709229
+    "test_loss": 0.018202655017375946,
+    "test_accuracy": 0.9944000244140625,
+    "epochs_trained": 13,
+    "best_val_accuracy": 0.9944000244140625
   },
   {
     "image_type": "mnist",
     "condition": "zero",
     "percent_kept": 0.75,
-    "test_loss": 0.018313048407435417,
-    "test_accuracy": 0.9944000244140625,
-    "epochs_trained": 18,
-    "best_val_accuracy": 0.9945999979972839
+    "test_loss": 0.018969286233186722,
+    "test_accuracy": 0.9941999912261963,
+    "epochs_trained": 10,
+    "best_val_accuracy": 0.9941999912261963
   },
   {
     "image_type": "mnist",
     "condition": "noise",
     "percent_kept": 0.75,
-    "test_loss": 0.021639687940478325,
-    "test_accuracy": 0.9937000274658203,
-    "epochs_trained": 25,
-    "best_val_accuracy": 0.9943000078201294
+    "test_loss": 0.019791316241025925,
+    "test_accuracy": 0.9940999746322632,
+    "epochs_trained": 15,
+    "best_val_accuracy": 0.9940999746322632
   },
   {
     "image_type": "cifar10",
     "condition": "original",
     "percent_kept": 0.75,
-    "test_loss": 0.6321296095848083,
-    "test_accuracy": 0.7900000214576721,
-    "epochs_trained": 24,
-    "best_val_accuracy": 0.794700026512146
+    "test_loss": 0.5785693526268005,
+    "test_accuracy": 0.8065000176429749,
+    "epochs_trained": 36,
+    "best_val_accuracy": 0.8065000176429749
   },
   {
     "image_type": "cifar10",
     "condition": "zero",
     "percent_kept": 0.75,
-    "test_loss": 0.6938986778259277,
-    "test_accuracy": 0.7738000154495239,
-    "epochs_trained": 31,
-    "best_val_accuracy": 0.7738000154495239
+    "test_loss": 0.7792441844940186,
+    "test_accuracy": 0.7351999878883362,
+    "epochs_trained": 44,
+    "best_val_accuracy": 0.7351999878883362
   },
   {
     "image_type": "cifar10",
     "condition": "noise",
     "percent_kept": 0.75,
-    "test_loss": 0.7769772410392761,
-    "test_accuracy": 0.7325999736785889,
-    "epochs_trained": 16,
-    "best_val_accuracy": 0.7336999773979187
+    "test_loss": 0.7898328900337219,
+    "test_accuracy": 0.7261000275611877,
+    "epochs_trained": 52,
+    "best_val_accuracy": 0.7261000275611877
   }
 ]
