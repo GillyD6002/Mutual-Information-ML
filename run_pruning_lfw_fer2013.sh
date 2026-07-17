@@ -18,15 +18,20 @@ set -euo pipefail
 # libcuda symlink fix for this host's driver, same as every other GPU job
 # on this box.
 #
-# Usage:
-#   ./run_pruning_lfw_fer2013.sh <gpu-device-index>
-#   e.g. ./run_pruning_lfw_fer2013.sh 2
+# Allocates every GPU on the box (--gpus all) rather than one device -
+# train_pruned_classifiers.py's main() already wraps training in
+# tf.distribute.MirroredStrategy(), which actually splits each batch across
+# however many GPUs are visible, so this isn't just exposing extra devices
+# for nothing. NOTE: this is a shared box (see memory) - grabbing every GPU
+# will starve anyone else's job running at the same time; only do this if
+# you know the box is otherwise idle right now (check `nvidia-smi`).
 #
-# Check `nvidia-smi` first and pick a device that's actually free - this is
-# a shared box. Runs detached (docker -d), so it survives disconnecting;
-# follow along with `docker logs -f mi-pruning-lfw-fer2013`.
+# Usage:
+#   ./run_pruning_lfw_fer2013.sh
+#
+# Runs detached (docker -d), so it survives disconnecting; follow along
+# with `docker logs -f mi-pruning-lfw-fer2013`.
 
-GPU_DEVICE="${1:?usage: $0 <gpu-device-index>  (run nvidia-smi first to find a free one)}"
 CONTAINER_NAME="mi-pruning-lfw-fer2013"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -36,16 +41,30 @@ if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
     exit 1
 fi
 
-docker run -d --gpus "\"device=${GPU_DEVICE}\"" --name "${CONTAINER_NAME}" \
+docker run -d --gpus all --name "${CONTAINER_NAME}" \
     -v "${REPO_DIR}:/workspace" -w /workspace \
     tensorflow/tensorflow:2.17.0-gpu bash -c '
         set -euo pipefail
         mkdir -p /tmp/fixed-cuda
-        # Symlink whatever libcuda.so.* the host actually has, rather than
-        # hardcoding a driver version - this box'"'"'s driver has moved before.
-        CUDA_LIB="$(ls /usr/lib/x86_64-linux-gnu/libcuda.so.*.* 2>/dev/null | head -1)"
-        if [ -z "${CUDA_LIB}" ]; then
-            echo "No /usr/lib/x86_64-linux-gnu/libcuda.so.* found - is this actually a GPU host?" >&2
+        # tensorflow/tensorflow:2.17.0-gpu bakes in its own libcuda.so.*
+        # (a stub matching whatever CUDA version the image was built
+        # against), and the images default libcuda.so symlink chain points
+        # at *that* one, not at the real driver library the NVIDIA
+        # container toolkit mounts in from the host. If they don'"'"'t match,
+        # cuInit fails and TF reports zero GPUs even though --gpus all
+        # worked. So this has to match the exact file whose version equals
+        # the host'"'"'s actual driver version (from nvidia-smi) - not just
+        # "the first libcuda.so.* found", which previously happened to
+        # pick the right one only because its version number
+        # (535.183.01) sorted alphabetically before the image'"'"'s bundled
+        # one (545.23.06); that'"'"'s incidental and breaks for other version
+        # pairs (e.g. "6.0.0" sorts after "10.2.0" alphabetically despite
+        # being numerically smaller).
+        DRIVER_VERSION="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)"
+        CUDA_LIB="/usr/lib/x86_64-linux-gnu/libcuda.so.${DRIVER_VERSION}"
+        if [ ! -f "${CUDA_LIB}" ]; then
+            echo "Expected ${CUDA_LIB} (matching host driver ${DRIVER_VERSION}) not found; libcuda.so.* present:" >&2
+            ls /usr/lib/x86_64-linux-gnu/libcuda.so.* >&2 2>/dev/null || true
             exit 1
         fi
         ln -sf "${CUDA_LIB}" /tmp/fixed-cuda/libcuda.so.1
@@ -66,7 +85,7 @@ docker run -d --gpus "\"device=${GPU_DEVICE}\"" --name "${CONTAINER_NAME}" \
             --datasets lfw_faces,fer2013_hf --percent-kept 0.5
     '
 
-echo "Started container ${CONTAINER_NAME} on GPU device ${GPU_DEVICE}."
+echo "Started container ${CONTAINER_NAME} using all GPUs on the box."
 echo "Follow progress:   docker logs -f ${CONTAINER_NAME}"
 echo "Check it's alive:  docker ps"
 echo "Results land in:   MI_scaling_non_middle/results/pruning/{lfw_faces,fer2013_hf}_*"
