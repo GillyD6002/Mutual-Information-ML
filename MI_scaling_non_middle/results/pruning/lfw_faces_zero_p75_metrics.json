@@ -1,0 +1,9 @@
+{
+  "image_type": "lfw_faces",
+  "condition": "zero",
+  "percent_kept": 0.75,
+  "test_loss": 4.109457015991211,
+  "test_accuracy": 0.00657894741743803,
+  "epochs_trained": 9,
+  "best_val_accuracy": 0.01315789483487606
+}

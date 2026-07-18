@@ -1,0 +1,9 @@
+{
+  "image_type": "fer2013_hf",
+  "condition": "noise",
+  "percent_kept": 0.75,
+  "test_loss": 1.7453757524490356,
+  "test_accuracy": 0.299164354801178,
+  "epochs_trained": 33,
+  "best_val_accuracy": 0.31142061948776245
+}

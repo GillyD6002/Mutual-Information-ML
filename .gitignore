@@ -10,3 +10,5 @@ __pycache__/
 # committing small result artifacts (plots, small .npy arrays), not large
 # binaries.
 *.keras
+MI_scaling_non_middle/results/cnn/*_activations.npy
+mi-pruning-lfw-fer2013-push.log
