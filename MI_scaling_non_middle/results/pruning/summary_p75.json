@@ -1,56 +1,56 @@
 [
   {
-    "image_type": "lfw_faces",
+    "image_type": "mnist",
     "condition": "original",
     "percent_kept": 0.75,
-    "test_loss": 3.7786219120025635,
-    "test_accuracy": 0.18421052396297455,
-    "epochs_trained": 20,
-    "best_val_accuracy": 0.23026315867900848
+    "test_loss": 0.018202655017375946,
+    "test_accuracy": 0.9944000244140625,
+    "epochs_trained": 13,
+    "best_val_accuracy": 0.9944000244140625
   },
   {
-    "image_type": "lfw_faces",
+    "image_type": "mnist",
     "condition": "zero",
     "percent_kept": 0.75,
-    "test_loss": 4.109457015991211,
-    "test_accuracy": 0.00657894741743803,
-    "epochs_trained": 9,
-    "best_val_accuracy": 0.01315789483487606
+    "test_loss": 0.018969286233186722,
+    "test_accuracy": 0.9941999912261963,
+    "epochs_trained": 10,
+    "best_val_accuracy": 0.9941999912261963
   },
   {
-    "image_type": "lfw_faces",
+    "image_type": "mnist",
     "condition": "noise",
     "percent_kept": 0.75,
-    "test_loss": 3.8815066814422607,
-    "test_accuracy": 0.18421052396297455,
-    "epochs_trained": 16,
-    "best_val_accuracy": 0.19078947603702545
+    "test_loss": 0.019791316241025925,
+    "test_accuracy": 0.9940999746322632,
+    "epochs_trained": 15,
+    "best_val_accuracy": 0.9940999746322632
   },
   {
-    "image_type": "fer2013_hf",
+    "image_type": "cifar10",
     "condition": "original",
     "percent_kept": 0.75,
-    "test_loss": 1.1676257848739624,
-    "test_accuracy": 0.5498607158660889,
-    "epochs_trained": 60,
-    "best_val_accuracy": 0.5571030378341675
+    "test_loss": 0.5785693526268005,
+    "test_accuracy": 0.8065000176429749,
+    "epochs_trained": 36,
+    "best_val_accuracy": 0.8065000176429749
   },
   {
-    "image_type": "fer2013_hf",
+    "image_type": "cifar10",
     "condition": "zero",
     "percent_kept": 0.75,
-    "test_loss": 1.5970066785812378,
-    "test_accuracy": 0.38718661665916443,
-    "epochs_trained": 60,
-    "best_val_accuracy": 0.39721447229385376
+    "test_loss": 0.7792441844940186,
+    "test_accuracy": 0.7351999878883362,
+    "epochs_trained": 44,
+    "best_val_accuracy": 0.7351999878883362
   },
   {
-    "image_type": "fer2013_hf",
+    "image_type": "cifar10",
     "condition": "noise",
     "percent_kept": 0.75,
-    "test_loss": 1.7453757524490356,
-    "test_accuracy": 0.299164354801178,
-    "epochs_trained": 33,
-    "best_val_accuracy": 0.31142061948776245
+    "test_loss": 0.7898328900337219,
+    "test_accuracy": 0.7261000275611877,
+    "epochs_trained": 52,
+    "best_val_accuracy": 0.7261000275611877
   }
 ]

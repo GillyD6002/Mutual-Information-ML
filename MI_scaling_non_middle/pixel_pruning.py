@@ -133,7 +133,7 @@ def tile_mask_to_pixel_mask(tile_mask, img_size):
     return pixel_mask_from_edges(tile_mask, edges)
 
 
-def load_sliding_window_mi(image_type, results_dir, window_size=3, stride=3):
+def load_sliding_window_mi(image_type, results_dir, img_size, window_size=3, stride=3):
 
     # Reuses sliding_window_mi.py's already-computed sweep output
     # (results/{image_type}_sliding_w{window_size}_s{stride}_mi_direct.npy
@@ -169,13 +169,16 @@ def load_sliding_window_mi(image_type, results_dir, window_size=3, stride=3):
     if np.isnan(heatmap).any():
         raise ValueError(f"{heatmap_path} has unfinished (NaN) tiles - that sweep hasn't completed yet.")
     positions = np.load(positions_path)
-    # The true image size isn't stored in positions.npy itself; every
-    # caller in this project uses img.DEFAULT_IMAGE_SIZE (28), and the
-    # sweep that produced this data (sliding_window_mi.py) always ran
-    # against that same constant, so it's used directly instead of
-    # inferring it from the positions array.
-    from src import image as img
-    edges = np.concatenate([positions, [img.DEFAULT_IMAGE_SIZE]]).astype(int)
+    # The true image size isn't stored in positions.npy itself, and can't
+    # be safely inferred from positions[-1] + window_size either: that
+    # only equals the real image size when img_size divides evenly by
+    # window_size (true for lfw_faces/fer2013_hf's grids, not for
+    # mnist/cifar10's 28px images at window=3, where the last position
+    # falls 1px short of the edge - see the closing-the-gap note above).
+    # So the caller has to pass the actual size sliding_window_mi.py ran
+    # this sweep against (each dataset's entry in that script's DATASETS
+    # dict) rather than a single project-wide constant.
+    edges = np.concatenate([positions, [img_size]]).astype(int)
     return (heatmap, edges)
 
 

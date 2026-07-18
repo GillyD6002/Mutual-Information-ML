@@ -35,7 +35,13 @@ def ensure_results_dir():
 
 
 def visualize(image_type, percent_kept):
-    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
+    # img.DEFAULT_IMAGE_SIZE only matches this script's own default
+    # datasets (mnist/cifar10) - lfw_faces/fer2013_hf now run at their own,
+    # larger sizes (see sliding_window_mi.py's DATASETS dict) and aren't
+    # wired up here since this preview script hasn't been asked to support
+    # them.
+    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, img.DEFAULT_IMAGE_SIZE,
+                                               window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
     tile_mask = build_tile_mask(heatmap, percent_kept)
     pixel_mask = pixel_mask_from_edges(tile_mask, edges)
 

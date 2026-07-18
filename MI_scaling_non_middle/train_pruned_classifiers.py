@@ -33,48 +33,70 @@ from MI_scaling_non_middle.pixel_pruning import build_tile_mask, pixel_mask_from
 # Architecture is deliberately NOT train_cnn.py's 3-conv/no-pooling network
 # - that one was built so its activations stay 28x28 for re-mining MI, not
 # for classification accuracy. MNIST uses a conventional 2-block
-# conv+pool+dropout CNN; CIFAR-10, lfw_faces, and fer2013_hf are all
-# meaningfully harder tasks at this same grayscale, 28x28 resolution (for
-# CIFAR-10, well below what color, full-resolution CIFAR-10 benchmarks
-# reach), so they share a deeper, wider, augmented network of their own
-# (build_augmented_classifier), on a larger epoch budget, since a bigger
-# network needs more room to converge. Datasets were never meant to share
-# one architecture's capacity across each other; only each dataset's *own*
-# three conditions need to train identically for the pruning comparison to
-# be fair (see below), and they still do.
+# conv+pool+dropout CNN; CIFAR-10 is a meaningfully harder task at this same
+# grayscale, 28x28 resolution (well below what color, full-resolution
+# CIFAR-10 benchmarks reach), so it gets a deeper, wider, augmented network
+# of its own (build_augmented_classifier), on a larger epoch budget, since a
+# bigger network needs more room to converge.
 #
-# "Do the same amount of training to keep it fair" (the user's framing) is
-# implemented as: identical architecture, optimizer, batch size, max epochs,
-# and early-stopping patience/monitor across all three conditions of a given
-# dataset - the same training *protocol* and *budget*, not a hand-picked
-# fixed epoch count. Early stopping is kept (rather than disabled) because
-# every other training script in this project already uses it this way
-# (train_cnn.py), and forcing a fixed epoch count regardless of overfitting
-# would bias the comparison in the other direction (rewarding whichever
-# condition happens to overfit slowest).
+# lfw_faces and fer2013_hf are different from all three of the above in two
+# ways, not just one:
+#   - They run at their own, much larger native (or near-native) resolution
+#     - 96x96 and 48x48 respectively - instead of being squished down to
+#     28x28. A first pass at this pipeline resized both down to 28x28 to
+#     match mnist/cifar10, which tanked accuracy (identity/emotion detail
+#     doesn't survive that much downsampling) - see IMAGE_SIZES below and
+#     each loader's docstring for how the new sizes are reached.
+#   - They use transfer learning (build_transfer_classifier: a pretrained
+#     MobileNetV2 ImageNet backbone, fine-tuned) rather than a from-scratch
+#     CNN, since both are fundamentally data-scarce problems a bigger
+#     from-scratch network doesn't fix - lfw_faces has only on the order of
+#     tens of images per identity across dozens of identities, and even
+#     fer2013_hf's ~29k training images is small next to what a CNN
+#     typically needs to learn good features from scratch. A pretrained
+#     backbone starts with strong generic visual features already learned
+#     from millions of images, which a small/specialized dataset then only
+#     has to adapt rather than learn from zero. See
+#     TRANSFER_LEARNING_DATASETS/run_condition for the resulting two-phase
+#     (frozen head, then fine-tune) training loop this requires - a plain
+#     single model.fit() call, as mnist/cifar10 use, doesn't fit a
+#     pretrained backbone's standard training recipe.
 #
-# lfw_faces (identity classification) and fer2013_hf (7-class emotion
-# classification) plug into this same pipeline via img.get_images's
-# existing support for both source names (see src/image.py) - the only
-# thing that had to be added for them was a *labeled* loader (get_images
-# only returns raw pixels; MI measurement doesn't need labels, but training
-# a classifier does) and their own model builder, since neither is a
-# built-in keras.datasets set. Both still need to go through
-# NUM_CLASSES-generic model builders (unlike mnist/cifar10's fixed 10),
-# since fer2013_hf's class count depends on the emotion taxonomy and
-# lfw_faces's depends on LFW_MIN_FACES_PER_PERSON.
+# Datasets were never meant to share one architecture's capacity/resolution
+# across each other; only each dataset's *own* three conditions need to
+# train identically for the pruning comparison to be fair (see below), and
+# they still do - "the same amount of training to keep it fair" (the user's
+# original framing for mnist/cifar10) is implemented as identical
+# architecture, optimizer, batch size, max epochs, and early-stopping
+# patience/monitor across all three conditions of a given dataset, not
+# across datasets.
 #
-# Run as (needs sliding_window_mi.py's window=3 sweep to have been run for
-# each dataset first - already true for mnist/cifar10 as of this writing;
-# lfw_faces/fer2013_hf need `python -m MI_scaling_non_middle.sliding_window_mi
-# --datasets lfw_faces,fer2013_hf --window-sizes 3` run once beforehand):
+# Each dataset's own tile grid for the MI-guided pruning mask is also
+# dataset-specific now (TILE_WINDOW_SIZES below), chosen so that
+# window_size tiles its own IMAGE_SIZES entry with zero leftover edge - see
+# pixel_pruning.load_sliding_window_mi's docstring on why window_size must
+# equal stride, and why mnist/cifar10's 28px images still close a 1px gap
+# rather than tiling perfectly (28 has no reasonable divisor near 3).
+#
+# Run as (needs sliding_window_mi.py's sweep to have been run for each
+# dataset first, at that dataset's own window size - see
+# run_pruning_lfw_fer2013.sh for the lfw_faces/fer2013_hf invocations):
 #     python -m MI_scaling_non_middle.train_pruned_classifiers
 #     python -m MI_scaling_non_middle.train_pruned_classifiers --percent-kept 0.5
 #     python -m MI_scaling_non_middle.train_pruned_classifiers --datasets mnist
 
 MI_RESULTS_DIR = os.path.join(ROOT, "MI_scaling_non_middle", "results")
 RESULTS_DIR = os.path.join(MI_RESULTS_DIR, "pruning")
-IMAGE_SIZE = img.DEFAULT_IMAGE_SIZE
+
+# Per-dataset native (or near-native) resolution - must match
+# sliding_window_mi.py's DATASETS dict exactly, since the MI heatmap/tile
+# grid this pipeline reuses was measured at that size.
+IMAGE_SIZES = {
+    "mnist": img.DEFAULT_IMAGE_SIZE,
+    "cifar10": img.DEFAULT_IMAGE_SIZE,
+    "lfw_faces": 96,
+    "fer2013_hf": 48,
+}
 
 CONDITIONS = ["original", "zero", "noise"]
 DATASETS = ["mnist", "cifar10", "lfw_faces", "fer2013_hf"]
@@ -87,25 +109,40 @@ DATASETS = ["mnist", "cifar10", "lfw_faces", "fer2013_hf"]
 # classification.
 LFW_MIN_FACES_PER_PERSON = 20
 
-# window_size == stride is what makes this sweep a non-overlapping tiling -
-# see pixel_pruning.load_sliding_window_mi's docstring.
-TILE_WINDOW_SIZE = 3
-TILE_STRIDE = 3
+# window_size == stride for every dataset - what makes each sweep a
+# non-overlapping tiling (see pixel_pruning.load_sliding_window_mi's
+# docstring). mnist/cifar10 keep the original 3 (their sweep already
+# exists at that value); lfw_faces (96px) and fer2013_hf (48px) use larger
+# windows chosen to divide their own IMAGE_SIZES entry evenly with no
+# leftover edge, at a similar tiles-per-axis granularity to the original
+# (96/8 = 48/4 = 12 tiles per axis, vs mnist/cifar10's 28/3 ~= 9).
+TILE_WINDOW_SIZES = {
+    "mnist": 3,
+    "cifar10": 3,
+    "lfw_faces": 8,
+    "fer2013_hf": 4,
+}
+
+# lfw_faces/fer2013_hf use transfer learning (see build_transfer_classifier
+# and run_condition) rather than a plain single model.fit() call - this set
+# is what run_condition checks to decide which training path to use.
+TRANSFER_LEARNING_DATASETS = {"lfw_faces", "fer2013_hf"}
 
 BATCH_SIZE = 128
-# Per-dataset training budget: CIFAR-10's deeper/augmented network needs
-# more epochs to converge than MNIST's smaller one, so it gets a larger
-# budget - this is still "the same amount of training" in the sense that
-# matters (see module docstring): identical across a given dataset's own
-# three conditions, just not identical *between* datasets, which was never
-# a fairness requirement. lfw_faces and fer2013_hf both get cifar10's
-# larger budget - like cifar10, both use its augmented 3-block
-# architecture (see build_lfw_classifier/build_fer2013_classifier).
+# Per-dataset training budget. mnist/cifar10 use a single training phase
+# ({"epochs", "patience"}); lfw_faces/fer2013_hf use a different shape of
+# config since transfer learning needs two phases - a frozen-backbone
+# "head" phase (train just the new classification head) followed by a
+# "finetune" phase (unfreeze the backbone, continue training end-to-end at
+# a much lower learning rate, the standard transfer-learning recipe). See
+# run_condition's TRANSFER_LEARNING_DATASETS branch.
 TRAINING_CONFIG = {
     "mnist": {"epochs": 40, "patience": 6},
     "cifar10": {"epochs": 60, "patience": 8},
-    "lfw_faces": {"epochs": 60, "patience": 8},
-    "fer2013_hf": {"epochs": 60, "patience": 8},
+    "lfw_faces": {"head_epochs": 15, "head_patience": 5,
+                  "finetune_epochs": 30, "finetune_patience": 8, "finetune_lr": 1e-5},
+    "fer2013_hf": {"head_epochs": 15, "head_patience": 5,
+                   "finetune_epochs": 30, "finetune_patience": 8, "finetune_lr": 1e-5},
 }
 
 # Fixed so that the *same* noise draw is used for a given (dataset,
@@ -121,8 +158,8 @@ def ensure_results_dir():
 
 def load_mnist_labeled():
     ((x_train, y_train), (x_test, y_test)) = ks.datasets.mnist.load_data()
-    x_train = img.conform_size(x_train / 255, IMAGE_SIZE, mode="crop").astype(np.float32)
-    x_test = img.conform_size(x_test / 255, IMAGE_SIZE, mode="crop").astype(np.float32)
+    x_train = img.conform_size(x_train / 255, IMAGE_SIZES["mnist"], mode="crop").astype(np.float32)
+    x_test = img.conform_size(x_test / 255, IMAGE_SIZES["mnist"], mode="crop").astype(np.float32)
     return (x_train, y_train, x_test, y_test)
 
 
@@ -134,11 +171,33 @@ def load_cifar10_labeled():
     # CNN-activation-extraction-specific constants (CONV_FILTERS etc).
 
     ((x_train, y_train), (x_test, y_test)) = ks.datasets.cifar10.load_data()
-    x_train = img.conform_size(img.convert_to_grayscale(x_train / 255), IMAGE_SIZE, mode="crop").astype(np.float32)
-    x_test = img.conform_size(img.convert_to_grayscale(x_test / 255), IMAGE_SIZE, mode="crop").astype(np.float32)
+    x_train = img.conform_size(img.convert_to_grayscale(x_train / 255), IMAGE_SIZES["cifar10"], mode="crop").astype(np.float32)
+    x_test = img.conform_size(img.convert_to_grayscale(x_test / 255), IMAGE_SIZES["cifar10"], mode="crop").astype(np.float32)
     y_train = y_train.squeeze(axis=1)
     y_test = y_test.squeeze(axis=1)
     return (x_train, y_train, x_test, y_test)
+
+
+def _lfw_to_square(images, target_size):
+
+    # LFW's native crop (fetch_lfw_people(resize=1.0)'s default slice) is
+    # (125, 94) - non-square, and target_size (96) sits *between* those two
+    # values, so neither cropping alone nor padding alone reaches it on
+    # both axes: height (125) is center-cropped down to target_size, width
+    # (94) is edge-padded (replicating the border pixel, not a stark black
+    # band) up to target_size. Either way, every kept pixel is a real,
+    # unaltered original value - unlike img.conform_size's "resize" mode
+    # (interpolation), used here for exactly zero pixels, since the whole
+    # point of this rewrite was to stop synthesizing/squishing pixel
+    # values and train on the real native resolution instead.
+
+    (_, height, width) = images.shape
+    top = (height - target_size) // 2
+    cropped = images[:, top:top + target_size, :]
+    pad_total = target_size - width
+    pad_left = pad_total // 2
+    pad_right = pad_total - pad_left
+    return np.pad(cropped, ((0, 0), (0, 0), (pad_left, pad_right)), mode="edge")
 
 
 def load_lfw_labeled():
@@ -150,10 +209,7 @@ def load_lfw_labeled():
     # LFW_MIN_FACES_PER_PERSON. LFW ships with no canonical train/test
     # split for this task, so one is carved out here (stratified, so every
     # kept person appears in both splits regardless of how few images they
-    # have). Native images are resized (not cropped) to IMAGE_SIZE like
-    # src/image.py's lfw_faces branch - they're already a non-square
-    # 125x94 crop, so "crop to 28x28" would cut away most of the face
-    # rather than shrink it.
+    # have).
 
     from sklearn.datasets import fetch_lfw_people
     from sklearn.model_selection import train_test_split
@@ -161,8 +217,9 @@ def load_lfw_labeled():
     data = fetch_lfw_people(min_faces_per_person=LFW_MIN_FACES_PER_PERSON, resize=1.0)
     (x_train, x_test, y_train, y_test) = train_test_split(
         data.images, data.target, test_size=0.2, random_state=NOISE_SEED, stratify=data.target)
-    x_train = img.conform_size(x_train, IMAGE_SIZE, mode="resize").astype(np.float32)
-    x_test = img.conform_size(x_test, IMAGE_SIZE, mode="resize").astype(np.float32)
+    target_size = IMAGE_SIZES["lfw_faces"]
+    x_train = _lfw_to_square(x_train, target_size).astype(np.float32)
+    x_test = _lfw_to_square(x_test, target_size).astype(np.float32)
     return (x_train, y_train, x_test, y_test)
 
 
@@ -174,10 +231,9 @@ def load_fer2013_labeled():
     # dataset's own train (28,709) / test (7,178) split as-is rather than
     # carving out a new one - unlike lfw_faces, FER-2013 already ships with
     # a canonical split for its intended (emotion) task. Native images are
-    # 48x48; resized (not cropped) down to IMAGE_SIZE, since a 48->28 center
-    # crop would trim 10px off every edge and risk losing the
-    # mouth/eyebrows that carry most of the expression (see the matching
-    # note on src/image.py's get_images fer2013_hf branch).
+    # already 48x48 (IMAGE_SIZES["fer2013_hf"]), so - unlike the previous
+    # version of this loader, which squished them down to 28x28 - no
+    # resize/crop is needed here at all.
 
     from datasets import load_dataset
 
@@ -190,8 +246,6 @@ def load_fer2013_labeled():
 
     (x_train, y_train) = to_arrays("train")
     (x_test, y_test) = to_arrays("test")
-    x_train = img.conform_size(x_train, IMAGE_SIZE, mode="resize").astype(np.float32)
-    x_test = img.conform_size(x_test, IMAGE_SIZE, mode="resize").astype(np.float32)
     return (x_train, y_train, x_test, y_test)
 
 
@@ -206,23 +260,28 @@ LOADERS = {
 def load_tile_mask(image_type, percent_kept):
 
     # Sources the per-tile MI ranking from sliding_window_mi.py's existing
-    # window=3/stride=3 sweep (load_sliding_window_mi) rather than running a
-    # fresh MI measurement - see pixel_pruning.py's module docstring for why
-    # this is both free (already computed) and finer-grained/cleaner than
-    # the coarser alternatives (a 3x3 grid of 9 unequal-size tiles, or a
-    # Voronoi partition of independently-measured boxes). The 81 identically
-    # -sized 3x3 tiles this sweep measured already tile the image almost
-    # exactly (edges from load_sliding_window_mi close the 1px gap its last
-    # position leaves short of the far edge), so pixel_mask_from_edges is a
-    # plain box expansion - no Voronoi step needed.
+    # sweep at this dataset's own window size (load_sliding_window_mi)
+    # rather than running a fresh MI measurement - see pixel_pruning.py's
+    # module docstring for why this is both free (already computed) and
+    # finer-grained/cleaner than the coarser alternatives (a 3x3 grid of 9
+    # unequal-size tiles, or a Voronoi partition of independently-measured
+    # boxes). For lfw_faces/fer2013_hf the tiles measured tile the image
+    # exactly (window_size divides IMAGE_SIZES[image_type] with zero
+    # remainder, by construction - see TILE_WINDOW_SIZES); for mnist/
+    # cifar10, edges from load_sliding_window_mi close the 1px gap the
+    # sweep's last position leaves short of the far edge. Either way
+    # pixel_mask_from_edges is a plain box expansion - no Voronoi step
+    # needed.
 
-    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
+    window_size = TILE_WINDOW_SIZES[image_type]
+    (heatmap, edges) = load_sliding_window_mi(
+        image_type, MI_RESULTS_DIR, IMAGE_SIZES[image_type], window_size=window_size, stride=window_size)
     tile_mask = build_tile_mask(heatmap, percent_kept)
     pixel_mask = pixel_mask_from_edges(tile_mask, edges)
     return (pixel_mask, tile_mask, heatmap)
 
 
-def build_mnist_classifier(num_classes):
+def build_mnist_classifier(num_classes, image_size):
 
     # Two conv+conv+pool+dropout blocks (32 then 64 filters) followed by a
     # dense head - a conventional, reasonably strong CNN for 28x28
@@ -231,7 +290,7 @@ def build_mnist_classifier(num_classes):
     # layer's activation map at input resolution). MNIST is easy enough at
     # this resolution that this size is already sufficient to reach ~99.6%.
 
-    inputs = ks.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 1))
+    inputs = ks.Input(shape=(image_size, image_size, 1))
     x = inputs
     for filters in (32, 64):
         x = ks.layers.Conv2D(filters, 3, padding="same", activation="relu")(x)
@@ -251,7 +310,7 @@ def build_mnist_classifier(num_classes):
     return model
 
 
-def build_augmented_classifier(num_classes):
+def build_augmented_classifier(num_classes, image_size):
 
     # A deeper, wider version of build_mnist_classifier: three
     # conv+conv+pool+dropout blocks (32/64/128 filters, vs MNIST's two at
@@ -259,16 +318,16 @@ def build_augmented_classifier(num_classes):
     # data augmentation (RandomFlip/RandomTranslation/RandomZoom - Keras
     # preprocessing layers that are no-ops during model.evaluate/predict, so
     # the held-out test set this is scored on is never itself augmented).
-    # Used for every dataset harder than MNIST at this same grayscale/28x28
-    # resolution - CIFAR-10 (object classification), lfw_faces (identity,
-    # far fewer images per class than CIFAR-10 has per object class) and
-    # fer2013_hf (emotion) - all of which saw train accuracy pull well
+    # Used only for CIFAR-10 - a meaningfully harder task than MNIST at this
+    # same grayscale/28x28 resolution, which saw train accuracy pull well
     # ahead of val accuracy at MNIST's plain, unaugmented 2-block
-    # architecture. Only a horizontal flip and small shifts/zooms are used
-    # - nothing that would plausibly flip a class label for any of the
-    # three.
+    # architecture. (lfw_faces/fer2013_hf use build_transfer_classifier
+    # instead - see its docstring for why a bigger from-scratch network
+    # like this one doesn't fix what's wrong with those two.) Only a
+    # horizontal flip and small shifts/zooms are used - nothing that would
+    # plausibly flip a CIFAR-10 class label.
 
-    inputs = ks.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 1))
+    inputs = ks.Input(shape=(image_size, image_size, 1))
     x = inputs
     x = ks.layers.RandomFlip("horizontal")(x)
     x = ks.layers.RandomTranslation(0.1, 0.1)(x)
@@ -291,11 +350,74 @@ def build_augmented_classifier(num_classes):
     return model
 
 
+# MobileNetV2's own pretrained-weights resolution we standardize both
+# transfer-learning datasets on - one of the handful of sizes (96/128/160/
+# 192/224) Keras actually ships ImageNet weights for, and conveniently
+# equal to lfw_faces's own IMAGE_SIZES entry already (chosen partly for
+# this reason), so only fer2013_hf (48px) needs the internal upsize below.
+TRANSFER_BACKBONE_SIZE = 96
+
+
+def build_transfer_classifier(num_classes, image_size):
+
+    # Transfer learning instead of a from-scratch CNN: both lfw_faces and
+    # fer2013_hf are fundamentally data-scarce problems (lfw_faces has only
+    # on the order of tens of images per identity across dozens of
+    # identities; fer2013_hf's ~29k training images is still small next to
+    # what a CNN typically needs to learn good features from zero) - a
+    # bigger build_augmented_classifier-style network doesn't fix a
+    # data-scarcity problem, it just overfits a bigger model to the same
+    # small dataset. A pretrained ImageNet backbone (MobileNetV2) starts
+    # with strong generic visual features already learned from millions of
+    # images, and only has to adapt them to this dataset rather than learn
+    # from scratch - the standard approach for both face-identity and
+    # emotion recognition on limited data in practice.
+    #
+    # Grayscale (1-channel) input is replicated to 3 channels (Concatenate)
+    # since MobileNetV2 was trained on RGB, and rescaled from this
+    # pipeline's [0, 1] range to the [-1, 1] range MobileNetV2 expects
+    # (equivalent to the official mobilenet_v2.preprocess_input for
+    # originally-[0,255] input, just applied directly to [0,1] instead of
+    # scaling up through 255 first). fer2013_hf (48px) is upsized to
+    # TRANSFER_BACKBONE_SIZE via an internal Resizing layer *after* the
+    # input - i.e. after pruning has already been applied to the true
+    # 48x48 array - so the backbone gets a size it's actually pretrained
+    # for without changing what resolution the MI-guided pruning mask
+    # itself operates on; lfw_faces (already 96px) passes straight through.
+    #
+    # The backbone starts frozen (trainable=False) here; run_condition's
+    # TRANSFER_LEARNING_DATASETS branch unfreezes it for a second,
+    # low-learning-rate fine-tuning phase after this initial head-only
+    # phase - the standard two-phase transfer-learning recipe.
+
+    inputs = ks.Input(shape=(image_size, image_size, 1))
+    x = inputs
+    if image_size != TRANSFER_BACKBONE_SIZE:
+        x = ks.layers.Resizing(TRANSFER_BACKBONE_SIZE, TRANSFER_BACKBONE_SIZE)(x)
+    x = ks.layers.Concatenate(axis=-1)([x, x, x])
+    x = ks.layers.Rescaling(2.0, offset=-1.0)(x)
+    base_model = ks.applications.MobileNetV2(
+        input_shape=(TRANSFER_BACKBONE_SIZE, TRANSFER_BACKBONE_SIZE, 3), include_top=False, weights="imagenet")
+    base_model.trainable = False
+    x = base_model(x, training=False)
+    x = ks.layers.GlobalAveragePooling2D()(x)
+    x = ks.layers.Dropout(0.3)(x)
+    outputs = ks.layers.Dense(num_classes, activation="softmax")(x)
+    model = ks.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer=ks.optimizers.Adam(learning_rate=1e-3),
+                  loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    # Stashed so run_condition's fine-tuning phase can unfreeze this
+    # specific layer later - a plain attribute on the Model object, not a
+    # Keras API of its own.
+    model.transfer_base = base_model
+    return model
+
+
 MODEL_BUILDERS = {
     "mnist": build_mnist_classifier,
     "cifar10": build_augmented_classifier,
-    "lfw_faces": build_augmented_classifier,
-    "fer2013_hf": build_augmented_classifier,
+    "lfw_faces": build_transfer_classifier,
+    "fer2013_hf": build_transfer_classifier,
 }
 
 
@@ -310,6 +432,48 @@ def condition_paths(image_type, condition, percent_kept):
         "metrics": os.path.join(RESULTS_DIR, f"{tag}_metrics.json"),
         "model": os.path.join(RESULTS_DIR, f"{tag}.keras"),
     }
+
+
+def train_transfer_learning(model, xt, y_train, xv, y_test, batch_size, config):
+
+    # Two-phase fine-tuning, the standard recipe for a pretrained backbone:
+    #   1. "head" phase - backbone frozen (as build_transfer_classifier left
+    #      it), train only the new classification head. The backbone's
+    #      pretrained weights would otherwise get scrambled by large,
+    #      randomly-initialized gradients flowing back from the brand-new
+    #      head during its first few, least-informed updates.
+    #   2. "finetune" phase - unfreeze the backbone and continue training
+    #      end-to-end at a much lower learning rate (config["finetune_lr"],
+    #      typically ~100x smaller than the head phase's), so the
+    #      pretrained features get gently adapted to this dataset rather
+    #      than overwritten.
+    # Both phases' per-epoch histories are concatenated into one dict
+    # (rather than returning two separate History objects) so the rest of
+    # run_condition - epoch counts, best-val-accuracy, the saved history
+    # JSON - doesn't need to know two model.fit() calls happened.
+
+    xt = np.expand_dims(xt, axis=3)
+    xv = np.expand_dims(xv, axis=3)
+
+    head_history = model.fit(
+        xt, y_train, validation_data=(xv, y_test),
+        batch_size=batch_size, epochs=config["head_epochs"],
+        callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=config["head_patience"], restore_best_weights=True)],
+        verbose=2,
+    )
+
+    model.transfer_base.trainable = True
+    model.compile(optimizer=ks.optimizers.Adam(learning_rate=config["finetune_lr"]),
+                  loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    finetune_history = model.fit(
+        xt, y_train, validation_data=(xv, y_test),
+        batch_size=batch_size, epochs=config["finetune_epochs"],
+        callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=config["finetune_patience"], restore_best_weights=True)],
+        verbose=2,
+    )
+
+    combined = {key: head_history.history[key] + finetune_history.history[key] for key in head_history.history}
+    return combined
 
 
 def run_condition(image_type, condition, x_train, y_train, x_test, y_test, pixel_mask, percent_kept, batch_size, num_classes):
@@ -331,14 +495,17 @@ def run_condition(image_type, condition, x_train, y_train, x_test, y_test, pixel
         xv = apply_pruning(x_test, pixel_mask, condition, rng)
 
     config = TRAINING_CONFIG[image_type]
-    model = MODEL_BUILDERS[image_type](num_classes)
-    history = model.fit(
-        np.expand_dims(xt, axis=3), y_train,
-        validation_data=(np.expand_dims(xv, axis=3), y_test),
-        batch_size=batch_size, epochs=config["epochs"],
-        callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=config["patience"], restore_best_weights=True)],
-        verbose=2,
-    )
+    model = MODEL_BUILDERS[image_type](num_classes, IMAGE_SIZES[image_type])
+    if image_type in TRANSFER_LEARNING_DATASETS:
+        history = train_transfer_learning(model, xt, y_train, xv, y_test, batch_size, config)
+    else:
+        history = model.fit(
+            np.expand_dims(xt, axis=3), y_train,
+            validation_data=(np.expand_dims(xv, axis=3), y_test),
+            batch_size=batch_size, epochs=config["epochs"],
+            callbacks=[ks.callbacks.EarlyStopping(monitor="val_loss", patience=config["patience"], restore_best_weights=True)],
+            verbose=2,
+        ).history
     (test_loss, test_accuracy) = model.evaluate(np.expand_dims(xv, axis=3), y_test, verbose=0)
 
     metrics = {
@@ -347,11 +514,11 @@ def run_condition(image_type, condition, x_train, y_train, x_test, y_test, pixel
         "percent_kept": percent_kept,
         "test_loss": float(test_loss),
         "test_accuracy": float(test_accuracy),
-        "epochs_trained": len(history.history["loss"]),
-        "best_val_accuracy": float(max(history.history["val_accuracy"])),
+        "epochs_trained": len(history["loss"]),
+        "best_val_accuracy": float(max(history["val_accuracy"])),
     }
     with open(paths["history"], "w") as handle:
-        json.dump({key: [float(v) for v in values] for (key, values) in history.history.items()}, handle)
+        json.dump({key: [float(v) for v in values] for (key, values) in history.items()}, handle)
     with open(paths["metrics"], "w") as handle:
         json.dump(metrics, handle, indent=2)
     model.save(paths["model"])
@@ -437,9 +604,21 @@ def main():
                 )
             all_metrics.append(metrics)
 
+    # Merged into (rather than overwriting) any existing summary file, so a
+    # partial run (--datasets lfw_faces,fer2013_hf, say) updates just those
+    # datasets' entries instead of silently dropping every other dataset's
+    # results that a previous, differently-scoped run had already recorded
+    # here - this file previously lost its mnist/cifar10 entries exactly
+    # this way when a lfw_faces/fer2013_hf-only run overwrote it wholesale.
     summary_path = os.path.join(RESULTS_DIR, f"summary_p{int(round(args.percent_kept * 100))}.json")
+    existing_metrics = []
+    if os.path.exists(summary_path):
+        with open(summary_path) as handle:
+            existing_metrics = json.load(handle)
+    new_keys = {(m["image_type"], m["condition"]) for m in all_metrics}
+    merged_metrics = [m for m in existing_metrics if (m["image_type"], m["condition"]) not in new_keys] + all_metrics
     with open(summary_path, "w") as handle:
-        json.dump(all_metrics, handle, indent=2)
+        json.dump(merged_metrics, handle, indent=2)
 
     print("\n=== Summary ===")
     for metrics in all_metrics:
@@ -450,8 +629,12 @@ def main():
         # Only a full run of all three conditions makes the side-by-side
         # comparison plot meaningful, same reasoning as
         # sliding_window_mi.py's plot_combined guard on a full window-size
-        # sweep.
-        plot_comparison(all_metrics, args.percent_kept)
+        # sweep. Plotted from merged_metrics (every dataset ever recorded
+        # in this summary file), not just all_metrics (this run's subset),
+        # for the same reason the summary merge above exists - a
+        # lfw_faces/fer2013_hf-only run shouldn't make the comparison chart
+        # forget mnist/cifar10's panels.
+        plot_comparison(merged_metrics, args.percent_kept)
 
 
 if __name__ == "__main__":

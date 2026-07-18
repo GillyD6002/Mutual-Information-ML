@@ -53,16 +53,42 @@ from src import mine, image as img
 #     python -m MI_scaling_non_middle.sliding_window_mi
 
 RESULTS_DIR = os.path.join(ROOT, "MI_scaling_non_middle", "results")
+# lfw_faces/fer2013_hf run at their own native (or near-native) resolution
+# rather than being squished down to img.DEFAULT_IMAGE_SIZE (28) like
+# mnist/cifar10 - see train_pruned_classifiers.py's loaders for why. 96 and
+# 48 are also each chosen so a same-size window/stride (see
+# TILE_WINDOW_SIZES below) tiles them with zero leftover edge.
 DATASETS = {
     "mnist": img.DEFAULT_IMAGE_SIZE,
     "cifar10": img.DEFAULT_IMAGE_SIZE,
-    "lfw_faces": img.DEFAULT_IMAGE_SIZE,
-    "fer2013_hf": img.DEFAULT_IMAGE_SIZE,
+    "lfw_faces": 96,
+    "fer2013_hf": 48,
 }
 WINDOW_SIZES = list(range(3, 9))  # 3x3 through 8x8 inclusive
 STRIDE = 3
 
-NUM_IMAGES = 30000
+# Only used by the general (mnist/cifar10, multi-window-size) exploratory
+# sweep and as the --stride flag's default - the pruning-mask use case
+# (train_pruned_classifiers.py) always calls this script with an explicit
+# --stride equal to whatever single --window-sizes value it passes, so
+# that specific tiling is non-overlapping (see pixel_pruning.py's
+# load_sliding_window_mi docstring on why window_size must equal stride
+# there).
+
+# Per-dataset cap on how many images the MI estimator sees. mnist/cifar10
+# keep the original 30000 (unchanged, so their already-computed sweeps
+# stay reproducible); lfw_faces/fer2013_hf get a larger cap since neither
+# dataset actually has 70000 images (LFW has on the order of low
+# thousands after any min-faces-per-person filtering, FER-2013 has 35887
+# total) - in practice this just means "use every image available" for
+# both, for a more precise MI estimate now that we're not also trying to
+# keep this step cheap.
+NUM_IMAGES = {
+    "mnist": 30000,
+    "cifar10": 30000,
+    "lfw_faces": 70000,
+    "fer2013_hf": 70000,
+}
 PARAM_SETTINGS = dict(
     drop=0,
     learn=1e-4,
@@ -80,8 +106,8 @@ def ensure_results_dir():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-def get_positions(img_size, window_size):
-    return list(range(0, img_size - window_size + 1, STRIDE))
+def get_positions(img_size, window_size, stride):
+    return list(range(0, img_size - window_size + 1, stride))
 
 
 def build_sliding_region_fn(top, left, window_size):
@@ -96,8 +122,8 @@ def build_sliding_region_fn(top, left, window_size):
     return region_fn
 
 
-def result_paths(image_type, window_size):
-    tag = f"{image_type}_sliding_w{window_size}_s{STRIDE}"
+def result_paths(image_type, window_size, stride):
+    tag = f"{image_type}_sliding_w{window_size}_s{stride}"
     return {
         "direct": os.path.join(RESULTS_DIR, f"{tag}_mi_direct.npy"),
         "indirect": os.path.join(RESULTS_DIR, f"{tag}_mi_indirect.npy"),
@@ -107,13 +133,13 @@ def result_paths(image_type, window_size):
     }
 
 
-def run_sliding_sweep(image_type, target_size, window_size):
+def run_sliding_sweep(image_type, target_size, window_size, stride):
     ensure_results_dir()
-    positions = get_positions(target_size, window_size)
-    paths = result_paths(image_type, window_size)
+    positions = get_positions(target_size, window_size, stride)
+    paths = result_paths(image_type, window_size, stride)
     alg_settings = dict(
         image_type=image_type,
-        num_images=NUM_IMAGES,
+        num_images=NUM_IMAGES[image_type],
         strength="small",
         algorithm="logistic",
     )
@@ -153,9 +179,9 @@ def run_sliding_sweep(image_type, target_size, window_size):
     return (heatmap_direct, positions)
 
 
-def plot_heatmap(image_type, window_size, heatmap_direct, positions):
+def plot_heatmap(image_type, window_size, stride, heatmap_direct, positions):
     ensure_results_dir()
-    paths = result_paths(image_type, window_size)
+    paths = result_paths(image_type, window_size, stride)
 
     plt.figure(figsize=(7, 6))
     plt.imshow(np.clip(heatmap_direct, 0, None), cmap="viridis", origin="upper")
@@ -165,14 +191,14 @@ def plot_heatmap(image_type, window_size, heatmap_direct, positions):
     plt.yticks(range(len(positions)), tick_labels, fontsize=8)
     plt.xlabel("Window left edge (pixels)")
     plt.ylabel("Window top edge (pixels)")
-    plt.title(f"Sliding {window_size}x{window_size} window MI map ({image_type}, stride={STRIDE})", fontsize=13)
+    plt.title(f"Sliding {window_size}x{window_size} window MI map ({image_type}, stride={stride})", fontsize=13)
     plt.tight_layout()
     plt.savefig(paths["heatmap_pdf"])
     plt.savefig(paths["heatmap_png"], dpi=150)
     plt.close()
 
 
-def plot_combined(image_type, heatmaps_by_size):
+def plot_combined(image_type, stride, heatmaps_by_size):
 
     # One figure per dataset, one subplot per window size, sharing a single
     # color scale (the max direct-MI value across every size's heatmap) so
@@ -192,7 +218,7 @@ def plot_combined(image_type, heatmaps_by_size):
         axes.set_xticks([])
         axes.set_yticks([])
     fig.colorbar(image, ax=axes_row, fraction=0.02, pad=0.02, label="Direct MI (nats)")
-    fig.suptitle(f"Sliding-window MI maps across sizes 3x3-8x8 (stride={STRIDE}, {image_type})", fontsize=15)
+    fig.suptitle(f"Sliding-window MI maps across sizes 3x3-8x8 (stride={stride}, {image_type})", fontsize=15)
 
     pdf_path = os.path.join(RESULTS_DIR, f"{image_type}_sliding_combined_heatmap.pdf")
     png_path = os.path.join(RESULTS_DIR, f"{image_type}_sliding_combined_heatmap.png")
@@ -213,6 +239,10 @@ def parse_args():
                          help="Comma-separated subset of DATASETS keys to run (default: all)")
     parser.add_argument("--window-sizes", type=str, default=None,
                          help="Comma-separated subset of WINDOW_SIZES to run (default: all)")
+    parser.add_argument("--stride", type=int, default=STRIDE,
+                         help=f"Stride between window positions on both axes (default: {STRIDE}). "
+                              "Pass a value equal to --window-sizes' single value for a "
+                              "non-overlapping tiling (needed by pixel_pruning.py's mask-building).")
     return parser.parse_args()
 
 
@@ -225,19 +255,20 @@ def main():
     window_sizes = WINDOW_SIZES
     if args.window_sizes:
         window_sizes = [int(w.strip()) for w in args.window_sizes.split(",")]
+    stride = args.stride
 
     for (image_type, target_size) in datasets.items():
         heatmaps_by_size = {}
         for window_size in window_sizes:
-            (heatmap_direct, positions) = run_sliding_sweep(image_type, target_size, window_size)
-            plot_heatmap(image_type, window_size, heatmap_direct, positions)
+            (heatmap_direct, positions) = run_sliding_sweep(image_type, target_size, window_size, stride)
+            plot_heatmap(image_type, window_size, stride, heatmap_direct, positions)
             heatmaps_by_size[window_size] = (heatmap_direct, positions)
         if len(heatmaps_by_size) == len(WINDOW_SIZES):
             # Only the full, unsliced set of window sizes makes plot_combined's
             # shared-color-scale panel meaningful - a partial slice run in one
             # of several parallel containers would otherwise produce a
             # misleadingly incomplete combined figure.
-            plot_combined(image_type, heatmaps_by_size)
+            plot_combined(image_type, stride, heatmaps_by_size)
 
 
 if __name__ == "__main__":
