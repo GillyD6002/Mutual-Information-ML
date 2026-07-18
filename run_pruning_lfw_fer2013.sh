@@ -30,10 +30,17 @@ set -euo pipefail
 #   ./run_pruning_lfw_fer2013.sh
 #
 # Runs detached (docker -d), so it survives disconnecting; follow along
-# with `docker logs -f mi-pruning-lfw-fer2013`.
+# with `docker logs -f mi-pruning-lfw-fer2013`. A second, separate
+# background process waits on the container and auto-commits+pushes the
+# new results (MI_scaling_non_middle/results/, which already excludes the
+# large *.keras model weights via .gitignore) once training finishes - see
+# the nohup block at the bottom. That watcher is also independent of this
+# shell, so it still fires even if you disconnect before training ends;
+# progress lands in mi-pruning-lfw-fer2013-push.log.
 
 CONTAINER_NAME="mi-pruning-lfw-fer2013"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PUSH_LOG="${REPO_DIR}/mi-pruning-lfw-fer2013-push.log"
 
 if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
     echo "A container named ${CONTAINER_NAME} already exists (docker ps -a)." >&2
@@ -89,3 +96,30 @@ echo "Started container ${CONTAINER_NAME} using all GPUs on the box."
 echo "Follow progress:   docker logs -f ${CONTAINER_NAME}"
 echo "Check it's alive:  docker ps"
 echo "Results land in:   MI_scaling_non_middle/results/pruning/{lfw_faces,fer2013_hf}_*"
+
+# `docker wait` blocks until the container exits and prints its exit code -
+# run in its own nohup'd + disowned background process (not just `&`) so it
+# keeps running independent of this shell/terminal, exactly like the
+# detached container itself. Only commits on a clean (0) exit, so a
+# crashed/killed run doesn't get silently pushed as if it succeeded; skips
+# the push (not an error) if there's nothing staged, e.g. a rerun where
+# every condition's metrics file already existed and was skipped.
+nohup bash -c "
+    EXIT_CODE=\$(docker wait '${CONTAINER_NAME}')
+    cd '${REPO_DIR}'
+    if [ \"\${EXIT_CODE}\" != \"0\" ]; then
+        echo \"[\$(date)] Container exited \${EXIT_CODE} (failure) - not pushing.\" >> '${PUSH_LOG}'
+        exit 0
+    fi
+    git add MI_scaling_non_middle/results
+    if git diff --cached --quiet; then
+        echo \"[\$(date)] Training finished but nothing new to commit.\" >> '${PUSH_LOG}'
+        exit 0
+    fi
+    git commit -m 'Add lfw_faces/fer2013_hf pruning results' >> '${PUSH_LOG}' 2>&1
+    git push >> '${PUSH_LOG}' 2>&1
+    echo \"[\$(date)] Pushed lfw_faces/fer2013_hf pruning results.\" >> '${PUSH_LOG}'
+" > /dev/null 2>&1 &
+disown
+echo "Auto-push watcher started - will commit+push results once training finishes."
+echo "Watch it:          tail -f ${PUSH_LOG}"
