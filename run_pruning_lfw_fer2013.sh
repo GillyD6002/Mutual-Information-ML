@@ -117,8 +117,11 @@ nohup bash -c "
         exit 0
     fi
     git commit -m 'Add lfw_faces/fer2013_hf pruning results' >> '${PUSH_LOG}' 2>&1
-    git push >> '${PUSH_LOG}' 2>&1
-    echo \"[\$(date)] Pushed lfw_faces/fer2013_hf pruning results.\" >> '${PUSH_LOG}'
+    if git push >> '${PUSH_LOG}' 2>&1; then
+        echo \"[\$(date)] Pushed lfw_faces/fer2013_hf pruning results.\" >> '${PUSH_LOG}'
+    else
+        echo \"[\$(date)] git push FAILED - see output above. Commit is local only, fix and push manually.\" >> '${PUSH_LOG}'
+    fi
 " > /dev/null 2>&1 &
 disown
 echo "Auto-push watcher started - will commit+push results once training finishes."
