@@ -24,8 +24,21 @@ from MI_scaling_non_middle.pixel_pruning import build_tile_mask, pixel_mask_from
 
 MI_RESULTS_DIR = os.path.join(ROOT, "MI_scaling_non_middle", "results")
 RESULTS_DIR = os.path.join(MI_RESULTS_DIR, "pruning")
-TILE_WINDOW_SIZE = 3
-TILE_STRIDE = 3
+# Must match train_pruned_classifiers.py's IMAGE_SIZES/TILE_WINDOW_SIZES
+# exactly - the tile grid previewed here is only valid at the size/window
+# that sliding_window_mi.py's heatmap was actually measured at.
+IMAGE_SIZES = {
+    "mnist": img.DEFAULT_IMAGE_SIZE,
+    "cifar10": img.DEFAULT_IMAGE_SIZE,
+    "lfw_faces": 96,
+    "fer2013_hf": 48,
+}
+TILE_WINDOW_SIZES = {
+    "mnist": 3,
+    "cifar10": 3,
+    "lfw_faces": 8,
+    "fer2013_hf": 4,
+}
 NUM_EXAMPLES = 4
 NOISE_SEED = 20260714
 
@@ -35,17 +48,14 @@ def ensure_results_dir():
 
 
 def visualize(image_type, percent_kept):
-    # img.DEFAULT_IMAGE_SIZE only matches this script's own default
-    # datasets (mnist/cifar10) - lfw_faces/fer2013_hf now run at their own,
-    # larger sizes (see sliding_window_mi.py's DATASETS dict) and aren't
-    # wired up here since this preview script hasn't been asked to support
-    # them.
-    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, img.DEFAULT_IMAGE_SIZE,
-                                               window_size=TILE_WINDOW_SIZE, stride=TILE_STRIDE)
+    image_size = IMAGE_SIZES[image_type]
+    window_size = TILE_WINDOW_SIZES[image_type]
+    (heatmap, edges) = load_sliding_window_mi(image_type, MI_RESULTS_DIR, image_size,
+                                               window_size=window_size, stride=window_size)
     tile_mask = build_tile_mask(heatmap, percent_kept)
     pixel_mask = pixel_mask_from_edges(tile_mask, edges)
 
-    (images, _, _) = img.get_images(image_type, NUM_EXAMPLES, target_size=img.DEFAULT_IMAGE_SIZE)
+    (images, _, _) = img.get_images(image_type, NUM_EXAMPLES, target_size=image_size)
     rng = np.random.RandomState(NOISE_SEED)
     zero_images = apply_pruning(images, pixel_mask, "zero", rng)
     rng = np.random.RandomState(NOISE_SEED)
