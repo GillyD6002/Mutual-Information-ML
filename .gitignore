@@ -12,3 +12,11 @@ __pycache__/
 *.keras
 MI_scaling_non_middle/results/cnn/*_activations.npy
 mi-pruning-lfw-fer2013-push.log
+
+# Same regenerable-large-array reasoning as *_activations.npy above: the fixed
+# eval-image sample vgg_cifar10_model.py saves alongside its baseline outputs
+# is just the first N images of CIFAR-10's own test split (deterministic, ~24MB
+# at N=2000) - vgg_conv_pruning.py needs it on disk to diff pruned outputs
+# against, but there's nothing here git needs to track.
+MI_scaling_non_middle/results/vgg/vgg16_cifar10_eval_images.npy
+mi-vgg-pruning-push.log
