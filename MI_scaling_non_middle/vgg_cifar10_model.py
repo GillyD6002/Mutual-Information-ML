@@ -206,14 +206,23 @@ def main():
 
     # Same MirroredStrategy pattern as train_cnn.py/train_pruned_classifiers.py: splits
     # each batch across every visible GPU, transparently reduces to single-GPU with only
-    # one device visible.
+    # one device visible. train()'s fine-tune phase re-compiles the model with a fresh
+    # optimizer partway through - that optimizer's slot variables are built lazily on
+    # its first apply_gradients call, so the *entire* train() call (not just
+    # build_model()) has to run inside strategy.scope(), exactly like
+    # train_pruned_classifiers.py wraps its whole run_condition call (build + both
+    # compile/fit phases) in one `with strategy.scope():`. Splitting it (build_model()
+    # in scope, train() outside) builds the fine-tune optimizer's variables under the
+    # default (non-distributed) strategy instead, which raises "Mixing different
+    # tf.distribute.Strategy objects" as soon as the fine-tune phase's first
+    # apply_gradients call runs.
     strategy = tf.distribute.MirroredStrategy()
     print(f"MirroredStrategy running on {strategy.num_replicas_in_sync} device(s)")
     global_batch_size = args.batch_size * strategy.num_replicas_in_sync
 
     with strategy.scope():
         model = build_model()
-    train(model, x_train, y_train, x_test, y_test, global_batch_size)
+        train(model, x_train, y_train, x_test, y_test, global_batch_size)
 
     (test_loss, test_accuracy) = model.evaluate(x_test, y_test, batch_size=global_batch_size, verbose=0)
     print(f"Final held-out test accuracy: {test_accuracy:.4f} (test_loss={test_loss:.4f})")
